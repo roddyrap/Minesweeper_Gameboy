@@ -132,7 +132,7 @@ void click_tile(UINT8 x, UINT8 y) {
 	if (board_tiles[flatten_coords(x, y, board_size)].is_revealed) return;
 	board_tiles[flatten_coords(x, y, board_size)].is_revealed = 1;  // Revealed tile, to avoid duplication code in auto-reveal which I will hopefully add
 	UINT8 bombsNear = bombsNearTile(x, y);
-	reveal_tile(x, y, bombsNear);
+	reveal_tile(x - scroll_state[0], y - scroll_state[1], bombsNear);
 	// Auto-open if blank
 	if (bombsNear != 0) return;
 	for (INT16 i = -1; i < 2; i++) {
@@ -161,8 +161,10 @@ void set_board_size(UINT8 new_size, UINT8 num_bombs) {
 
 void first_tile() {
 	isFirstClick = 0;
-	BOOLEAN on_row_edge = cursor[1] == 0 || cursor[1] == board_size - 1;
-    BOOLEAN on_col_edge = cursor[0] == 0 || cursor[0] == board_size - 1;
+	UINT8 player_x = cursor_board_x();
+	UINT8 player_y = cursor_board_y();
+	BOOLEAN on_row_edge = player_y == 0 || player_y == board_size - 1;
+    BOOLEAN on_col_edge = player_x == 0 || player_x == board_size - 1;
     UINT8 protected_tiles_num = 9;
     if (on_row_edge && on_col_edge) protected_tiles_num = 4;
     else if (on_row_edge || on_col_edge) protected_tiles_num = 6;
@@ -172,7 +174,7 @@ void first_tile() {
 
         UINT16 tile_i;
         for (tile_i = 0; bomb_tile_i > 0; tile_i++) {
-            if (!board_tiles[tile_i].is_bomb && !(abs((INT16)cursor[0] - tile_i / board_size) <= 1 && abs((INT16)cursor[1] - tile_i % board_size) <= 1)) {
+            if (!board_tiles[tile_i].is_bomb && !(abs((INT16)player_x - tile_i / board_size) <= 1 && abs((INT16)player_x - tile_i % board_size) <= 1)) {
                 bomb_tile_i--;
             }
         }
@@ -183,7 +185,7 @@ void first_tile() {
     //        set_bkg_tiles(tile_i / board_size, tile_i % board_size, 1, 1, nearTiles + board_tiles[tile_i].is_bomb);
     //    }
     // End DEBUG
-	click_tile(cursor[0], cursor[1]);
+	click_tile(player_x, player_y);
 }
 
 
@@ -242,7 +244,7 @@ void checkInput() {
 	if (inputSlower % 4 != 0) return;
     if (joypad() & J_A) {
 		if (isFirstClick) first_tile();
-		else click_tile(cursor[0], cursor[1]);
+		else click_tile(cursor_board_x(), cursor_board_y());
     }
 	if (joypad() & J_B) {
 
