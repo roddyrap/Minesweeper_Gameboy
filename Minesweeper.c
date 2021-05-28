@@ -12,6 +12,7 @@
 typedef struct {
     unsigned int is_revealed : 1;
     unsigned int is_bomb : 1;
+	unsigned int is_flagged: 1;
 } board_tile;
 
 // Last funs decleration
@@ -19,13 +20,17 @@ void init();
 void checkInput();
 void anim_sprite(UINT8);
 UINT8 bombsNearTile(UINT8, UINT8);
+void click_tile(UINT8, UINT8);
 
+BOOLEAN a_clicked;
+BOOLEAN b_clicked;
 UINT8 num_rows = 9;  // Number of Y positions screen can show (Not including WIN) 
 UINT8 num_cols = 10;  // Number of X positions screen can show (Not including WIN)
 UINT8 scroll_state[2];  // Board offset from screen
 UINT8 cursor[2];  // Player location on board screen, (x, y)
 UINT8 board_size;  // Root of the number of tiles on the board, limited due to RAM.
 UINT16 bombs_num;  // Number of bombs on the board
+UINT16 flags_num;  // Number of flags left
 BOOLEAN isFirstClick;  // Should generate bombs on click
 board_tile *board_tiles;  // Information about tiles on the board, size of BoardNum^2
 // Helper functions
@@ -66,7 +71,10 @@ UINT8 scroll_board(INT8 x, INT8 y, UINT8 amount) {
 		for (UINT8 j = 0; j < num_rows; j++) {
 			UINT8 new_y = j + scroll_state[1];
 			UINT8 tile_offset = 0;
-			if (board_tiles[flatten_coords(new_x, new_y, board_size)].is_revealed) {
+			if (board_tiles[flatten_coords(new_x, new_y, board_size)].is_flagged) {
+				tile_offset = 11 * 4 + 4;
+			}
+			else if (board_tiles[flatten_coords(new_x, new_y, board_size)].is_revealed) {
 				UINT8 bombs_near = bombsNearTile(new_x, new_y);
 				tile_offset = 4 + 4 * bombs_near;
 			}
@@ -110,7 +118,7 @@ void move_cursor(INT8 x, INT8 y, UINT8 amount) {
 	// Check boundaries (with cursor wrapping)
 }
 
-void reveal_tile(UINT8 x, UINT8 y, UINT8 tile_num) {
+void reveal_tile(UINT8 x, UINT8 y, INT8 tile_num) {
 	set_bkg_tiles(2 * x, 2 * y, 2, 2, mine_tile_sheet_map + 4 + 4 * tile_num);
 }
 
@@ -128,12 +136,44 @@ UINT8 bombsNearTile(UINT8 tile_x, UINT8 tile_y) {
 	return numBombs;
 }
 
+UINT8 flagsNearTile(UINT8 tile_x, UINT8 tile_y) {
+	UINT8 numFlags = 0;
+	for (INT16 i = -1; i < 2; i++) {
+		for (INT16 j = -1; j < 2; j++) {
+			if (!coords_in_board(tile_x + i, tile_y + j) ||  i == 0 && j == 0) continue;
+			numFlags += board_tiles[flatten_coords(i + tile_x, j + tile_y, board_size)].is_flagged;
+		}
+	}
+	return numFlags;
+}
+
+void reveal_nearby(UINT8 x, UINT8 y) {
+	for (INT16 i = -1; i < 2; i++) {
+		for (INT16 j = -1; j < 2; j++) {
+			if (!coords_in_board(x + i, y + j) ||  x == 0 && y == 0) continue;
+			if (board_tiles[flatten_coords(i + x, j + y, board_size)].is_flagged) continue;
+			UINT8 bombsNear = bombsNearTile(i + x, j + y);
+			// Need to differentiate because click_tile reveals a lot
+			if (bombsNear == 0) click_tile(i + x, j + y);
+			else {
+				board_tiles[flatten_coords(i + x, j + y, board_size)].is_revealed = 1;
+				reveal_tile(x + i - scroll_state[0], y + j - scroll_state[1], bombsNear); 
+			}
+		}
+	}
+}
+
 void click_tile(UINT8 x, UINT8 y) {
-	if (board_tiles[flatten_coords(x, y, board_size)].is_revealed) return;
-	board_tiles[flatten_coords(x, y, board_size)].is_revealed = 1;  // Revealed tile, to avoid duplication code in auto-reveal which I will hopefully add
+	if (board_tiles[flatten_coords(x, y, board_size)].is_flagged) return;
 	UINT8 bombsNear = bombsNearTile(x, y);
+	if (board_tiles[flatten_coords(x, y, board_size)].is_revealed){
+		if (bombsNear == 0) return;
+		if (flagsNearTile(x, y) == bombsNear) reveal_nearby(x, y);
+	}
+	board_tiles[flatten_coords(x, y, board_size)].is_revealed = 1;  // Revealed tile, to avoid duplication code in auto-reveal which I will hopefully add
 	reveal_tile(x - scroll_state[0], y - scroll_state[1], bombsNear);
 	// Auto-open if blank
+	if (bombsNear != 0) return;
 	if (bombsNear != 0) return;
 	for (INT16 i = -1; i < 2; i++) {
 		for (INT16 j = -1; j < 2; j++) {
@@ -146,10 +186,12 @@ void click_tile(UINT8 x, UINT8 y) {
 void set_board_size(UINT8 new_size, UINT8 num_bombs) {
 	board_size = new_size;
 	bombs_num = num_bombs;
+	flags_num = num_bombs;
 	board_tiles = malloc(board_size * board_size);
 	for (UINT16 i=0; i < (UINT16)(board_size * board_size); i++){
 		board_tiles[i].is_bomb = 0;
 		board_tiles[i].is_revealed = 0;
+		board_tiles[i].is_flagged = 0;
 	}
 	isFirstClick = 1;
 	// Individually setting background because Idk
@@ -189,6 +231,20 @@ void first_tile() {
 }
 
 
+void flag_tile(UINT8 x, UINT8 y) {
+	if (board_tiles[flatten_coords(x, y, board_size)].is_revealed) return;
+	BOOLEAN is_flagged = board_tiles[flatten_coords(x, y, board_size)].is_flagged;
+	if (is_flagged) {
+		board_tiles[flatten_coords(x, y, board_size)].is_flagged = 0;
+		reveal_tile(x - scroll_state[0], y - scroll_state[1], -1);
+	}
+	else {
+		board_tiles[flatten_coords(x, y, board_size)].is_flagged = 1;
+		reveal_tile(x - scroll_state[0], y - scroll_state[1], 11);
+	}
+}
+
+
 void updateSwitches() {
 	SHOW_BKG;
 	SHOW_SPRITES;
@@ -211,11 +267,14 @@ void main() {
 void init() {
 	
 	DISPLAY_ON;		// Turn on the display
-	NR52_REG = 0x8F;	// Turn on the sound
-	NR51_REG = 0x11;	// Enable the sound channels
-	NR50_REG = 0x77;	// Increase the volume to its max
+	// NR52_REG = 0x8F;	// Turn on the sound
+	// NR51_REG = 0x11;	// Enable the sound channels
+	// NR50_REG = 0x77;	// Increase the volume to its max
 	// Init map
 	set_bkg_data(0, 49, mine_tile_sheet_data);	// Load Minetiles to memory
+	// Init buttons
+	a_clicked = 0;
+	b_clicked = 0;
 	// Initialize cursor
 	cursor[0] = 0;
 	cursor[1] = 0;
@@ -243,12 +302,20 @@ void checkInput() {
 	if (inputSlower % 30 == 0) anim_sprite(inputSlower % 60 / 30);
 	if (inputSlower % 4 != 0) return;
     if (joypad() & J_A) {
-		if (isFirstClick) first_tile();
-		else click_tile(cursor_board_x(), cursor_board_y());
+		if (!a_clicked) {
+			a_clicked = 1;
+			if (isFirstClick) first_tile();
+			else click_tile(cursor_board_x(), cursor_board_y());	
+		}
     }
+	else a_clicked = 0;
 	if (joypad() & J_B) {
-
+		if (!b_clicked) {
+			b_clicked = 1;
+			flag_tile(cursor_board_x(), cursor_board_y());
+		}
 	}
+	else b_clicked = 0;
 	if (joypad() & J_UP) {
 		move_cursor(0, -1, 1);
 	}
