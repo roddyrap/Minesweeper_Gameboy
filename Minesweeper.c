@@ -18,16 +18,16 @@
 
 /**
  * Known bugs and issues:
- * If a flag is placed on an empty tile, when it gets autoclicked the game will hang.
+ * - None for now!
  * Roadmap:
  *  - Add title screen that leads to diff select (might take a while, need a fullscreen image)
- *  - Add music
- *  - Add gameboy color colors, plan is to make every numbered tile have a different color 
- *  - Invert font
- *  - Rework direction input handling
+ *  - Add music (Probably not going to happen because I don't have a track)
+ *  - Add gameboy color colors, plan is to make every numbered tile have a different color (Done! ^_^ ) 
+ *  - Invert font (Done! ^_^ )
+ *  - Rework direction input handling (Done! ^_^ )
  * */
 
-// Declaring function as it and reveal_tile call eachother
+// Declaring function as it and click_tile call eachother
 void click_tile(unsigned char, unsigned char);
 
 
@@ -37,6 +37,24 @@ typedef struct {
 	unsigned int is_flagged: 1;  // Does it have a flag in it
 } board_tile_t; // Information stored on each tile
 // constants
+// CGB Palettes
+const unsigned short mine_tiles_cgb_palette[] = {
+	RGB_WHITE, RGB_DARKGRAY, RGB_LIGHTGRAY, RGB_BLACK, // Default palette
+	RGB_WHITE, RGB_DARKGRAY, RGB_BLUE, RGB_BLACK,  // 1 neighbour
+	RGB_WHITE, RGB_DARKGRAY, RGB_GREEN, RGB_BLACK,  // 2 neighbours
+	RGB_WHITE, RGB_DARKGRAY, RGB_RED, RGB_BLACK,  // 3 neighbours
+	RGB_WHITE, RGB_DARKGRAY, RGB_PURPLE, RGB_BLACK,  // 4 neighbours
+	RGB_WHITE, RGB_DARKGRAY, RGB_DARKRED, RGB_BLACK,  // 5 neighbours
+	RGB_WHITE, RGB_DARKGRAY, RGB_CYAN, RGB_BLACK,  // 6 neighbours
+	RGB_WHITE, RGB_DARKGRAY, RGB_PURPLE, RGB_BLACK,  // 7 neighbours
+	RGB_BLACK, RGB_DARKGRAY, RGB_LIGHTGRAY, RGB_BLACK,  // 8 neighbours
+	};
+
+// Sprite palette (only one is required and used)
+const unsigned short sprite_palette[] = {
+	RGB_BLUE, RGB_WHITE, RGB_LIGHTGRAY, RGB_BLACK
+};
+
 const int font_start = 0x32;  // Tile font start at this tile
 const int ui_background_start = 0x92;  // UI background tiles start
 const unsigned char bomb_indicator = 10;  // Identifies tile as a bomb in bombsNear 
@@ -141,6 +159,41 @@ unsigned char bombsNearTile(unsigned char tile_x, unsigned char tile_y) {
 	return numBombs;
 }
 
+// Draws a board tile (tile_num) to a specified location (x, y)
+void reveal_tile(unsigned char x, unsigned char y, signed char tile_num) {
+	// Check if coordinates are in the graphical part of the screen
+	if (x >= num_cols || y >= num_rows) return;
+	// CGB specific palette swap to color tiles
+	if (_cpu == CGB_TYPE) {
+		unsigned char palette_ind = tile_num;
+		// If empty. I know can be simplified to smaller and greater then but more intuitive this way
+		if (tile_num == 0 || tile_num == -1) {
+			// Regular palette if unique
+			palette_ind = 0;
+		}
+		// Check if flag
+		else if ((short)tile_num == flag_offset) {
+			// Red palette for flag
+			palette_ind = 3;
+		}
+		// Check if bomb
+		else if ((short)tile_num == bomb_indicator) {
+			palette_ind = 3;
+		}
+		// Write meta_data (tile palette is bits 0-2)
+		VBK_REG = 1;
+		// Setting number of tiles at once didn't work so for loop to loop over all 4 scren tiles
+		for (unsigned char tile_ind = 0; tile_ind < board_tile_screen_tile_area; tile_ind++) {
+			// Same bug as in move_sprite_grid
+			set_bkg_tile_xy(x * board_tile_screen_tiles_length + tile_ind % 2, y * board_tile_screen_tiles_length + (int)tile_ind / 2, palette_ind);
+		}
+		// Back to write regular data
+		VBK_REG = 0;
+	}
+	// Draw background with given tile, offset is board_tile_screen_tile_area * tile_num and starts from board_tile_screen_tile_area
+	set_bkg_tiles(2 * x, 2 * y, 2, 2, mine_tile_sheet_map + board_tile_screen_tile_area + board_tile_screen_tile_area * tile_num);
+}
+
 // Draws the whole board, factoring in the screen scroll
 void draw_current_board() {
 	for (unsigned short i = 0; i < num_cols; i++) {
@@ -151,18 +204,18 @@ void draw_current_board() {
 			// The y position of the drawn tile with scroll
 			unsigned char new_y = j + scroll_state[1];
 			// vram offset
-			unsigned char tile_offset = 0;
+			signed char tile_offset = -1;
 			if (board_tiles[flatten_coords(new_x, new_y, board_size)].is_flagged) {
 				// set offset to flag tile
-				tile_offset = board_tile_screen_tile_area + flag_offset * board_tile_screen_tile_area;
+				tile_offset = flag_offset;
 			}
 			else if (board_tiles[flatten_coords(new_x, new_y, board_size)].is_revealed) {
 				// find bombs near
 				unsigned char bombs_near = bombsNearTile(new_x, new_y);
 				// set to offset to bombs near
-				tile_offset = board_tile_screen_tile_area + board_tile_screen_tile_area * bombs_near;
+				tile_offset = bombs_near;
 			}
-			set_bkg_tiles(board_tile_screen_tiles_length * i, board_tile_screen_tiles_length * j, board_tile_screen_tiles_length, board_tile_screen_tiles_length, mine_tile_sheet_map + tile_offset);
+			reveal_tile(i, j, (signed char)tile_offset);
 		}
 	}
 }
@@ -230,14 +283,6 @@ void move_cursor(signed char x, signed char y) {
 	}
 	scroll_board(scroll_x, scroll_y);
 	// Check boundaries (with cursor wrapping)
-}
-
-// Draws a board tile (tile_num) to a specified location (x, y)
-void reveal_tile(unsigned char x, unsigned char y, signed char tile_num) {
-	// Check if coordinates are in the graphical part of the screen
-	if (x >= num_cols || y >= num_rows) return;
-	// Draw background with given tile, offset is board_tile_screen_tile_are * tile_num and starts from board_tile_screen_tile_area
-	set_bkg_tiles(2 * x, 2 * y, 2, 2, mine_tile_sheet_map + board_tile_screen_tile_area + board_tile_screen_tile_area * tile_num);
 }
 
 // Finds the amount of flags near a tile (not including itself)
@@ -481,7 +526,7 @@ void move_select(signed char y) {
 	if (select_param > 3) select_param = 0;
 	if (select_param < 0) select_param = 3;
 	// Moves
-	move_sprite(8, 32, 32 + select_param * 16);
+	move_sprite(8, 24, 32 + select_param * 16);
 }
 
 // 0: Easy, 1: Inter, 2: Expert, 3: NiMare
@@ -516,24 +561,37 @@ void select() {
 	if (select_menu_open == 0) {
 		// When not set it to open
 		select_menu_open = 1;
-		// Disable board input
-		input_enabled = 0;
+		// Disable palettes if GBC
+		if (_cpu == CGB_TYPE) {
+			// Write metadata
+			VBK_REG = 1;
+			// Loop over all select menu tiles
+			for (unsigned char tile_x = 0; tile_x < 8; tile_x++) {
+				for (unsigned char tile_y = 0; tile_y < 18; tile_y++) {
+					// Set palette to zero
+					set_bkg_tile_xy(2 + tile_x, tile_y, 0);
+				}
+			}
+			// Write regualr
+			VBK_REG = 0;
+		}
+
 		// Draw menu background
 		set_bkg_tiles(2, 0, 8, 18, ui_background_map);
 		// Write text to background using one array
 		unsigned char select_text[6];
 		// Write East diff
 		write_str_to_tile_array(select_text, 6, d10_name);
-		set_bkg_tiles(4, 2, 6, 1, select_text);
+		set_bkg_tiles(3, 2, 6, 1, select_text);
 		// Write Inter diff
 		write_str_to_tile_array(select_text, 6, d16_name);
-		set_bkg_tiles(4, 4, 6, 1, select_text);
+		set_bkg_tiles(3, 4, 6, 1, select_text);
 		// Write Expert diff
 		write_str_to_tile_array(select_text, 6, d22_name);
-		set_bkg_tiles(4, 6, 6, 1, select_text);
+		set_bkg_tiles(3, 6, 6, 1, select_text);
 		// Write NiMare diff
 		write_str_to_tile_array(select_text, 6, d32_name);
-		set_bkg_tiles(4, 8, 6, 1, select_text);
+		set_bkg_tiles(3, 8, 6, 1, select_text);
 		// Hide board sprite
 		set_sprite_prop(0, S_PRIORITY);
 		set_sprite_prop(1, S_PRIORITY);
@@ -548,17 +606,15 @@ void select() {
 	else {
 		// Track menu as closed
 		select_menu_open = 0;
-		// Allow board input
-		input_enabled = 1;
+		// Move select cursor to hidden origin
+		move_sprite(8, 0, 0);
+		// Draw board to remove drawing of selection menu
+		draw_current_board();
 		// Show board sprite
 		set_sprite_prop(0, 0);
 		set_sprite_prop(1, 0);
 		set_sprite_prop(2, 0);
 		set_sprite_prop(3, 0);
-		// Move select cursor to hidden origin
-		move_sprite(8, 0, 0);
-		// Draw board to remove drawing of selection menu
-		draw_current_board();
 	}
 
 }
@@ -609,11 +665,11 @@ void checkInput() {
 	else select_clicked = 0;
 	// Direction input handling
 	// Avoid clicking to quickly
-	if (!moving_dir || (inputSlower - moving_dir) / 4 == 0) {
+	if (!moving_dir || (inputSlower - moving_dir) % 4 == 0) {
 		// If up is clicked
 		if (joypad() & J_UP) {
 			// If can move
-			if (input_enabled) {
+			if (input_enabled || select_menu_open) {
 				// Move up
 				move_cursor(0, -1);
 				// Track movement
@@ -630,7 +686,7 @@ void checkInput() {
 		// If moves down
 		if (joypad() & J_DOWN) {
 			// If can move
-			if (input_enabled) {
+			if (input_enabled || select_menu_open) {
 				// Move down
 				move_cursor(0, 1);
 				// Track movement
@@ -647,7 +703,7 @@ void checkInput() {
 
 		}
 		// If can't move on board return (as left and right don't matter otherwise)
-		if (!input_enabled) return;
+		if (!input_enabled || select_menu_open) return;
 		// If left is pressed
 		if (joypad() & J_LEFT) {
 			// Move left
@@ -696,13 +752,16 @@ void checkInput() {
 
 
 void init() {
-	
-	DISPLAY_ON;		// Turn on the display
 	NR52_REG = 0x8F;	// Turn on the sound
 	NR51_REG = 0x11;	// Enable the sound channels
 	NR50_REG = 0x77;	// Increase the volume to its max
 	// GBC Support
-	if (_cpu == CGB_TYPE) cgb_compatibility();
+	if (_cpu == CGB_TYPE) {
+		// Setting up CGB palettes, 0 is used as default and overrides it as well
+		set_bkg_palette(0, 7, mine_tiles_cgb_palette);
+		// Sprite Palette
+		set_sprite_palette(0, 1, sprite_palette);
+	}
 	// Init map
 	set_bkg_data(0, 49, mine_tile_sheet_data);	// Load Minetiles to memory
 	set_bkg_data(50, 96, ChicagoFont_data);	// Load ChicagoFont to memory, 96 tiles
@@ -741,6 +800,7 @@ void init() {
 	// Init board (Important to do after UI init so Status will be written. Cost me like half an hour)
 	select_param = 0;
 	set_difficulty(select_param);
+	DISPLAY_ON;		// Turn on the display
 }
 
 // Main function that is run
