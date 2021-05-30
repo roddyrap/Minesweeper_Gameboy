@@ -4,6 +4,7 @@
 #include <ctype.h>
 #include "rand.h"
 #include "time.h"
+#include "stdbool.h"
 
 #include "Tiles/mine_tile_sheet_data.c"
 #include "Tiles/mine_tile_sheet_map.c"
@@ -15,232 +16,304 @@
 #include "Tiles/ui_background_map.c"
 #include "Tiles/mode_selector_data.c"
 
-// TODO: Can't click on tiles if scrolled, isn't aligned properly with rest of the code
+/**
+ * Known bugs and issues:
+ * If a flag is placed on an empty tile, when it gets autoclicked the game will hang.
+ * Roadmap:
+ *  - Fix bomb generation
+ *  - Add title screen that leads to diff select (might take a while, need a fullscreen image)
+ *  - Add music
+ *  - Add gameboy color colors, plan is to make every numbered tile have a different color 
+ * */
+
+void click_tile(unsigned char, unsigned char);
+
 
 typedef struct {
-    unsigned int is_revealed : 1;
-    unsigned int is_bomb : 1;
-	unsigned int is_flagged: 1;
-} board_tile;
+    unsigned int is_revealed : 1;  // Is tile revealed to the player
+    unsigned int is_bomb : 1;  // Is the tile a bomb
+	unsigned int is_flagged: 1;  // Does it have a flag in it
+} board_tile_t; // Information stored on each tile
 // constants
-const int font_start = 0x32; // Starts at space
+const int font_start = 0x32;  // Tile font start at this tile
+const int ui_background_start = 0x92;  // UI background tiles start
+const unsigned char bomb_indicator = 10;  // Identifies tile as a bomb in bombsNear 
 
-// Last funs decleration
-void init();
-void checkInput();
-void anim_sprite(UINT8);
-UINT8 bombsNearTile(UINT8, UINT8);
-void click_tile(UINT8, UINT8);
-void win();
-void lose();
+const unsigned char num_rows = 9;  // Number of Y positions screen can show (Not including UI) 
+const unsigned char num_cols = 6;  // Number of X positions screen can show (Not including UI)
 
-// consts
-const int ui_background_start = 0x92;
+const unsigned char origin_x_offset = 8;  // Gameboy sprite offset from top left in x axis
+const unsigned char origin_y_offset = 16;  // Gameboy sprite offset from top left in y axis
+
+const unsigned char board_tile_pixels_length = 16;  // Length (in pixels) of meta-tiles used.
+const unsigned char board_tile_screen_tiles_length = 2;  // Length (in pixels) of meta-tiles used.
+const unsigned char board_tile_screen_tile_area = 4;  // Area (in area of screen tiles) of meta-tiles used.
+const unsigned char screen_tile_pixels_length = 8;  // Length (in pixels) of screen tiles.
+
+
+const unsigned char flag_offset = 11;  // offset of flag tile from mineTiles  
+// Difficulty names
+const char *d10_name = "Easy  ";  // Easy string name
+const char *d16_name = "Inter ";  // Intermediate string name
+const char *d22_name = "Expert";  // Expert string name
+const char *d32_name = "NiMare";  // Nightmare string name
 
 // Typed vars
-unsigned char time_passed[5];
-unsigned char game_status[4];
-unsigned char flags_used[8];
-unsigned char scroll_show[5];
+unsigned char time_passed[5];  // UI tile string value of how much time passed since game start 
+const unsigned char time_passed_length = 5;  // length of time_passed
+unsigned char game_status[6]; // UI tile string value of the game's status (diff, won, lost)
+const unsigned char game_status_length = 4;  // length of game status
+unsigned char flags_used[8];  // UI tile string value of how much flags are left out of total
+const unsigned char flags_used_length = 8;  // length of flag used string
+unsigned char scroll_show[5];  // UI tile string value of current string scroll
+const unsigned char scroll_show_length = 5;  // length of scroll status string
 
-unsigned char ui_ordered_data[144];
-time_t start_time;
-BOOLEAN input_enabled;
-BOOLEAN a_clicked;
-BOOLEAN select_clicked;
-BOOLEAN b_clicked;
-BOOLEAN moving_dir;
-BOOLEAN select_menu_open;
-INT8 select_param;
-UINT8 num_rows = 9;  // Number of Y positions screen can show (Not including WIN) 
-UINT8 num_cols = 6;  // Number of X positions screen can show (Not including WIN)
-UINT8 scroll_state[2];  // Board offset from screen
-UINT8 cursor[2];  // Player location on board screen, (x, y)
-UINT8 board_size;  // Root of the number of tiles on the board, limited due to RAM.
-UINT16 bombs_num;  // Number of bombs on the board
-UINT16 flags_num;  // Number of flags left
-UINT16 flag_balance;  // Bombs unflagged
-BOOLEAN isFirstClick;  // Should generate bombs on click
-board_tile *board_tiles;  // Information about tiles on the board, size of BoardNum^2
+time_t start_time;  // Game start time, to track in UI
+bool input_enabled;  // Will player input move the sprite
+bool a_clicked;  // Is a clicked
+bool select_clicked;  // Is select clicked
+bool b_clicked;  // Is B clicked
+bool moving_dir; // Is moving
+bool select_menu_open;  // Is the difficulty selection menu open
+signed char select_param;  // What board size is selected
+unsigned char scroll_state[2];  // Board offset from screen
+unsigned char cursor[2];  // Player location on board screen, (x, y)
+unsigned char board_size;  // Root of the number of tiles on the board, limited due to RAM.
+unsigned short bombs_num;  // Number of bombs on the board
+unsigned short flags_num;  // Number of flags left
+unsigned short flag_balance;  // Bombs unflagged
+bool isFirstClick;  // Should generate bombs on click
+board_tile_t *board_tiles = 0;  // Information about tiles on the board, size of BoardNum^2
+
 // Helper functions
-void write_to_array(unsigned char* array, UINT8 array_size, char* str) {
-	for (UINT8 i = 0; i < array_size; i++) {
+// Takes a string (str) and writes it's ascii value as tiles to another array (array), at the specified size (array_size)
+void write_str_to_tile_array(unsigned char* array, unsigned char array_size, const char* str) {
+	for (unsigned char i = 0; i < array_size; i++) {
 		if (str[i] == 0) break;
-		array[i] = str[i] - ' ' + 0x32;
+		array[i] = str[i] - ' ' + font_start;
 	}
 }
 
-
-UINT16 flatten_coords(UINT8 x, UINT8 y, UINT8 row_size) {
-	return ((UINT16)y) * row_size + x;
+// For winning and losing
+void game_over(bool isWin) {
+	// Update status
+	write_str_to_tile_array(game_status, game_status_length, isWin ? "Win " : "Lose");
+	// Display status
+	set_bkg_tiles(13, 3, 4, 1, game_status);
+	// Disable input
+	input_enabled = 0;
 }
 
-BOOLEAN coords_in_board(INT8 x, INT8 y) {
-	return 	!(x < 0 || y < 0 || x >= (UINT16) board_size || y >= (UINT16) board_size);
+// Takes 2D coordinates and flattens them to 1D
+unsigned short flatten_coords(unsigned char x, unsigned char y, unsigned char row_size) {
+	return ((unsigned short)y) * row_size + x;
 }
-// Actual position on board
-UINT8 cursor_board_x() {
+
+// checks if given cooridnates are in the board
+bool coords_in_board(signed char x, signed char y) {
+	return 	!(x < 0 || y < 0 || x >= (unsigned short) board_size || y >= (unsigned short) board_size);
+}
+
+
+// Actual position on board (unlike cursor which is graphical position)
+unsigned char cursor_board_x() {
 	return cursor[0] + scroll_state[0];
 }
-UINT8 cursor_board_y() {
+unsigned char cursor_board_y() {
 	return cursor[1] + scroll_state[1];
 }
 
-void draw_current_board() {
-	for (UINT16 i = 0; i < num_cols; i++) {
-		UINT8 new_x = i + scroll_state[0];
-		
-		for (UINT8 j = 0; j < num_rows; j++) {
-			UINT8 new_y = j + scroll_state[1];
-			UINT8 tile_offset = 0;
-			if (board_tiles[flatten_coords(new_x, new_y, board_size)].is_flagged) {
-				tile_offset = 11 * 4 + 4;
-			}
-			else if (board_tiles[flatten_coords(new_x, new_y, board_size)].is_revealed) {
-				UINT8 bombs_near = bombsNearTile(new_x, new_y);
-				tile_offset = 4 + 4 * bombs_near;
-			}
-			set_bkg_tiles(2 * i, 2 * j, 2, 2, mine_tile_sheet_map + tile_offset);
-		}
-	}
-}
-// Movement
-// Scrolls the board and redraws *all* tiles, no bkg_scroll functionality used. 1-st bit for scrolled vertically, 2-nd bit for scrolled horizontally
-// Doesn't warp.
-// IS BROKEN.
-UINT8 scroll_board(INT8 x, INT8 y, UINT8 amount) {
-	UINT8 res = 0;
-	
-	if ((board_size - num_cols > scroll_state[0] && x == 1) || (scroll_state[0] > 0 && x == -1)) {
-		scroll_state[0] += x * amount;
-		res += 1;
-	}
-	if ((board_size - num_rows > scroll_state[1] && y == 1) || (scroll_state[1] > 0 && y == -1)) {
-		scroll_state[1] += y * amount;
-		res += 2;
-	}
-	if (res == 0) return 0;
-	// If scrolling happened, redraw
-	draw_current_board();
-	return res;
-}
-
-void move_sprite_grid(UINT8 new_x, UINT8 new_y) {
-	// Different off-sets because of Gameboy Schenanigans
-	move_sprite(0, new_x * 16 + 8, new_y * 16 + 16);
-	move_sprite(1, new_x * 16 + 16, new_y * 16 + 16);
-	move_sprite(2, new_x * 16 + 8, new_y * 16 + 24);
-	move_sprite(3, new_x * 16 + 16, new_y * 16+ 24);
-}
-void move_cursor(INT8 x, INT8 y, UINT8 amount) {
-	// Check boundaries (with cursor wrapping)
-	INT8 scroll_x = 0;
-	INT8 scroll_y = 0;
-	if (cursor[0] == 0 && x == -1) {
-		scroll_x = -1;
-	}
-	else if (cursor[1] == 0 && y == -1) {
-		scroll_y = -1;
-	}
-	else if (cursor[0] == num_cols - 1 && x == 1) {
-		scroll_x = 1;
-	}
-	else if (cursor[1] == num_rows - 1 && y == 1) {
-		scroll_y = 1;
-	}
-	// Move
-	else {
-		cursor[0] += x * amount;
-		cursor[1] += y * amount;
-		move_sprite_grid(cursor[0], cursor[1]); 
-		return;
-	}
-	scroll_board(scroll_x, scroll_y, 1);
-	// Check boundaries (with cursor wrapping)
-}
-
-void reveal_tile(UINT8 x, UINT8 y, INT8 tile_num) {
-	if (x >= num_cols || y >= num_rows) return;
-	set_bkg_tiles(2 * x, 2 * y, 2, 2, mine_tile_sheet_map + 4 + 4 * tile_num);
-}
-
-
-// 10 if tile is bomb
-UINT8 bombsNearTile(UINT8 tile_x, UINT8 tile_y) {
-	if (board_tiles[flatten_coords(tile_x, tile_y, board_size)].is_bomb) return 10;
-	UINT8 numBombs = 0;
-	for (INT16 i = -1; i < 2; i++) {
-		for (INT16 j = -1; j < 2; j++) {
-			if (!coords_in_board(tile_x + i, tile_y + j) ||  i == 0 && j == 0) continue;
+// Finds the amount of bombs near a tile (technically including itself)
+// bomb_indicator if tile is bomb
+unsigned char bombsNearTile(unsigned char tile_x, unsigned char tile_y) {
+	// If the tile is a bomb return bomb_indicator
+	if (board_tiles[flatten_coords(tile_x, tile_y, board_size)].is_bomb) return bomb_indicator;
+	// Loop over nearby tiles and find bombs
+	unsigned char numBombs = 0;
+	for (short i = -1; i < 2; i++) {
+		for (short j = -1; j < 2; j++) {
+			if (!coords_in_board(tile_x + i, tile_y + j)) continue;
 			numBombs += board_tiles[flatten_coords(i + tile_x, j + tile_y, board_size)].is_bomb;
 		}
 	}
 	return numBombs;
 }
 
-UINT8 flagsNearTile(UINT8 tile_x, UINT8 tile_y) {
-	UINT8 numFlags = 0;
-	for (INT16 i = -1; i < 2; i++) {
-		for (INT16 j = -1; j < 2; j++) {
+// Draws the whole board, factoring in the screen scroll
+void draw_current_board() {
+	for (unsigned short i = 0; i < num_cols; i++) {
+		// The X position of the drawn tiles with scroll
+		unsigned char new_x = i + scroll_state[0];
+		
+		for (unsigned char j = 0; j < num_rows; j++) {
+			// The y position of the drawn tile with scroll
+			unsigned char new_y = j + scroll_state[1];
+			// vram offset
+			unsigned char tile_offset = 0;
+			if (board_tiles[flatten_coords(new_x, new_y, board_size)].is_flagged) {
+				// set offset to flag tile
+				tile_offset = board_tile_screen_tile_area + flag_offset * board_tile_screen_tile_area;
+			}
+			else if (board_tiles[flatten_coords(new_x, new_y, board_size)].is_revealed) {
+				// find bombs near
+				unsigned char bombs_near = bombsNearTile(new_x, new_y);
+				// set to offset to bombs near
+				tile_offset = board_tile_screen_tile_area + board_tile_screen_tile_area * bombs_near;
+			}
+			set_bkg_tiles(board_tile_screen_tiles_length * i, board_tile_screen_tiles_length * j, board_tile_screen_tiles_length, board_tile_screen_tiles_length, mine_tile_sheet_map + tile_offset);
+		}
+	}
+}
+
+// Movement
+// Scrolls the board and redraws *all* tiles, no bkg_scroll functionality used. Doesn't warp.
+void scroll_board(signed char x, signed char y) {
+	// Tracking if screen was scrolled (logically) to know if to draw board
+	bool has_scrolled = 0;
+	// Check conditions for horizontal scroll
+	if ((scroll_state[0] < board_size - num_cols && x > 0) || (scroll_state[0] > 0 && x < 0)) {
+		// Track scroll
+		scroll_state[0] += x;
+		// Draw when should
+		has_scrolled = 1;
+	}
+	// Check conditions for vertical scroll
+	if ((board_size - num_rows > scroll_state[1] && y > 0) || (scroll_state[1] > 0 && y < 0)) {
+		// Track scroll
+		scroll_state[1] += y;
+		// Draw when should
+		has_scrolled = 1;
+	}
+	// If didn't scroll return
+	if (has_scrolled == 0) return;
+	// If scrolling happened, redraw
+	draw_current_board();
+}
+
+void move_sprite_grid(unsigned char new_x, unsigned char new_y) {
+	// Different off-sets because of Gameboy Schenanigans
+	for (unsigned char sprite_ind = 0; sprite_ind < board_tile_screen_tile_area; sprite_ind++) {
+		// TODO: I want to swap the literal "8" with the variable "screen_tile_pixel_length" but even though they are the same value it doesn't work. Bit shifting by the correct amount (3) doesn't work as well
+		move_sprite(sprite_ind, new_x * board_tile_pixels_length + origin_x_offset + 8 * (sprite_ind % 2), new_y * board_tile_pixels_length + origin_y_offset + 8 * ( (int)sprite_ind / 2));
+
+	}
+}
+
+
+void move_cursor(signed char x, signed char y) {
+	// Check if player wants to scroll
+	signed char scroll_x = 0;
+	signed char scroll_y = 0;
+	// Check scroll conditions
+	if (cursor[0] == 0 && x < 0) {
+		scroll_x = x;
+	}
+	else if (cursor[1] == 0 && y < 0) {
+		scroll_y = y;
+	}
+	else if (cursor[0] == num_cols - 1 && x > 0) {
+		scroll_x = x;
+	}
+	else if (cursor[1] == num_rows - 1 && y > 0) {
+		scroll_y = y;
+	}
+	// Move
+	else {
+		cursor[0] += x;
+		cursor[1] += y;
+		// Draw player grid
+		move_sprite_grid(cursor[0], cursor[1]);
+		// Return if moved
+		return;
+	}
+	scroll_board(scroll_x, scroll_y);
+	// Check boundaries (with cursor wrapping)
+}
+
+// Draws a board tile (tile_num) to a specified location (x, y)
+void reveal_tile(unsigned char x, unsigned char y, signed char tile_num) {
+	// Check if coordinates are in the graphical part of the screen
+	if (x >= num_cols || y >= num_rows) return;
+	// Draw background with given tile, offset is board_tile_screen_tile_are * tile_num and starts from board_tile_screen_tile_area
+	set_bkg_tiles(2 * x, 2 * y, 2, 2, mine_tile_sheet_map + board_tile_screen_tile_area + board_tile_screen_tile_area * tile_num);
+}
+
+// Finds the amount of flags near a tile (not including itself)
+unsigned char flagsNearTile(unsigned char tile_x, unsigned char tile_y) {
+	// Track number of flags
+	unsigned char numFlags = 0;
+	// Loop over neighbores
+	for (short i = -1; i < 2; i++) {
+		for (short j = -1; j < 2; j++) {
+			// Check if neighbour is flag
 			if (!coords_in_board(tile_x + i, tile_y + j) ||  i == 0 && j == 0) continue;
+			// Track flags near
 			numFlags += board_tiles[flatten_coords(i + tile_x, j + tile_y, board_size)].is_flagged;
 		}
 	}
 	return numFlags;
 }
 
-void reveal_nearby(UINT8 x, UINT8 y) {
-	for (INT16 i = -1; i < 2; i++) {
-		for (INT16 j = -1; j < 2; j++) {
-			if (!coords_in_board(x + i, y + j) ||  x == 0 && y == 0) continue;
-			if (board_tiles[flatten_coords(i + x, j + y, board_size)].is_flagged) continue;
-			UINT8 bombsNear = bombsNearTile(i + x, j + y);
-			// Need to differentiate because click_tile reveals a lot
-			if (bombsNear == 0) click_tile(i + x, j + y);
-			else {
-				board_tiles[flatten_coords(i + x, j + y, board_size)].is_revealed = 1;
-				if (board_tiles[flatten_coords(i + x, j + y, board_size)].is_bomb) lose();
-				reveal_tile(x + i - scroll_state[0], y + j - scroll_state[1], bombsNear); 
-			}
+// Reveal nearby tiles
+void reveal_nearby(unsigned char x, unsigned char y) {
+	// Loop over neighbores
+	for (short i = -1; i < 2; i++) {
+		for (short j = -1; j < 2; j++) {
+			// If tile is not in board or is iteslf continue to next one
+			if (!coords_in_board(x + i, y + j) ||  i == 0 && j == 0) continue;
+			// If the tile is flagged or was already revealed continue
+			if (board_tiles[flatten_coords(i + x, j + y, board_size)].is_flagged || board_tiles[flatten_coords(i + x, j + y, board_size)].is_revealed) continue;
+			// Reveal tile by simulating clicking on it
+			click_tile(x + i, y + j);
 		}
 	}
 }
 
-void click_tile(UINT8 x, UINT8 y) {
+// Click on tile, revealing it if possible
+void click_tile(unsigned char x, unsigned char y) {
+	// If the wanted tile is flagged return
 	if (board_tiles[flatten_coords(x, y, board_size)].is_flagged) return;
-	UINT8 bombsNear = bombsNearTile(x, y);
-	if (bombsNear == 10) {
-		lose();
+	// Find the amount of bombs near the tile
+	unsigned char bombsNear = bombsNearTile(x, y);
+	// If the tile is a bomb
+	if (bombsNear == bomb_indicator) {
+		// Lose
+		game_over(0);
 	}
-	if (board_tiles[flatten_coords(x, y, board_size)].is_revealed){
-		if (bombsNear == 0) return;
-		if (flagsNearTile(x, y) == bombsNear) reveal_nearby(x, y);
+	// If the tile was not previously revealed
+	if (board_tiles[flatten_coords(x, y, board_size)].is_revealed == 0) {
+		// Set it to revealed
+		board_tiles[flatten_coords(x, y, board_size)].is_revealed = 1;
+		// If no bombs are nearby autoreveal all nearby tiles
+		if (bombsNear == 0)  reveal_nearby(x, y);
 	}
-	board_tiles[flatten_coords(x, y, board_size)].is_revealed = 1;  // Revealed tile, to avoid duplication code in auto-reveal which I will hopefully add
+	// If the amount of flags nearby equals the number of a tile (and it isn't empty) reveal all nearby tiles
+	if (flagsNearTile(x, y) == bombsNear && bombsNear != 0) reveal_nearby(x, y);  // Will auto-reveal numbered tiles with enough flags, this is not a wanted behaviour but I don't have a way to efficently change it.
+	// Re-draw clicked tile to show revealed status
 	reveal_tile(x - scroll_state[0], y - scroll_state[1], bombsNear);
-	// Auto-open if blank
-	if (bombsNear != 0) return;
-	if (bombsNear != 0) return;
-	for (INT16 i = -1; i < 2; i++) {
-		for (INT16 j = -1; j < 2; j++) {
-			if (!coords_in_board(x + i, y + j) ||  x == 0 && y == 0) continue;
-			click_tile(i + x, j + y);
-		}
-	}
 }
 
-void number_to_chars(unsigned char *array, UINT8 arr_start, UINT8 arr_end, UINT32 num) {
-	for (UINT8 neg_ind = 1; neg_ind <= arr_end - arr_start; neg_ind++) {
-		array[arr_end - neg_ind] = 0x42 + num % 10;
+// Take a number (8-bit, num) and write it to an array (array) from index arr_start to arr_end
+void number_to_chars(unsigned char *array, unsigned char arr_start, unsigned char arr_end, unsigned long num) {
+	for (unsigned char neg_ind = 1; neg_ind <= arr_end - arr_start; neg_ind++) {
+		// Set index to last digit in tile structuring
+		array[arr_end - neg_ind] = num % 10 + font_start + '0' - ' ';
+		// Alter number
 		num = num / 10;
 	}
 }
 
-void set_board_size(UINT8 new_size, UINT8 num_bombs) {
+// Change board size and number of bombs, functions as a reset
+void set_board_size(unsigned char new_size, unsigned char num_bombs) {
+	// Track time
 	start_time = time(0);
+	// Track board size
 	board_size = new_size;
+	// Track number of bombs
 	bombs_num = num_bombs;
+	// Set available flags
 	flags_num = num_bombs;
+	// Set unflagged bombs
 	flag_balance = num_bombs;
 	// Init buttons
 	a_clicked = 0;
@@ -251,10 +324,9 @@ void set_board_size(UINT8 new_size, UINT8 num_bombs) {
 	// menus
 	select_menu_open = 0;
 	// Initialize changing ui
-	write_to_array(game_status, 4, "Play");
-	write_to_array(time_passed, 5, "00000");
-	write_to_array(flags_used, 8, "000//000");
-	write_to_array(scroll_show, 5, "00/00");
+	write_str_to_tile_array(time_passed, time_passed_length, "00000");
+	write_str_to_tile_array(flags_used, flags_used_length, "000//000");
+	write_str_to_tile_array(scroll_show, scroll_show_length, "00/00");
 	// Initialize cursor
 	cursor[0] = 0;
 	cursor[1] = 0;
@@ -264,177 +336,344 @@ void set_board_size(UINT8 new_size, UINT8 num_bombs) {
 	scroll_state[1] = 0;
 	// updating flag string
 	number_to_chars(flags_used, 5, 8, flags_num);
-	
+	// Freeing used tile memory
+	free(board_tiles);
+	// Reset board data to zero
 	board_tiles = malloc(board_size * board_size);
-	for (UINT16 i=0; i < (UINT16)(board_size * board_size); i++){
+	for (unsigned short i=0; i < (unsigned short)(board_size * board_size); i++){
 		board_tiles[i].is_bomb = 0;
 		board_tiles[i].is_revealed = 0;
 		board_tiles[i].is_flagged = 0;
 	}
+	// Bombs were not initialized and will be at next click
 	isFirstClick = 1;
-	// Individually setting background because Idk
-	for (UINT16 i = 0; i < num_cols; i++) {
-		for (UINT8 j = 0; j < num_rows;j++)
-			set_bkg_tiles(2 * i, 2 * j, 2, 2, mine_tile_sheet_map);
-	}
+	// Re-draw board
+	draw_current_board();
 }
 
+// First player click, initializing bombs
 void first_tile() {
+	// Set first click to pressed
 	isFirstClick = 0;
-	UINT8 player_x = cursor_board_x();
-	UINT8 player_y = cursor_board_y();
-	BOOLEAN on_row_edge = player_y == 0 || player_y == board_size - 1;
-    BOOLEAN on_col_edge = player_x == 0 || player_x == board_size - 1;
-    UINT8 protected_tiles_num = 9;
+	// Bomb generation script. Not working (not factoring player position and rarely doesn't generate enough bombs), and fairly slow. Will not be documented as of now
+	unsigned char player_x = cursor_board_x();
+	unsigned char player_y = cursor_board_y();
+	bool on_row_edge = player_y == 0 || player_y == board_size - 1;
+    bool on_col_edge = player_x == 0 || player_x == board_size - 1;
+    unsigned char protected_tiles_num = 9;
     if (on_row_edge && on_col_edge) protected_tiles_num = 4;
     else if (on_row_edge || on_col_edge) protected_tiles_num = 6;
 
-    for (UINT16 bomb_i = 0; bomb_i < bombs_num; bomb_i++) {
-        UINT16 bomb_tile_i = ((UINT16)rand() * (UINT8)rand()) % ((UINT16)board_size * board_size - protected_tiles_num - bomb_i);
+    for (unsigned short bomb_i = 0; bomb_i < bombs_num; bomb_i++) {
+        unsigned short bomb_tile_i = ((unsigned short)rand() * (unsigned char)rand()) % ((unsigned short)board_size * board_size - protected_tiles_num - bomb_i);
 
-        UINT16 tile_i;
+        unsigned short tile_i;
         for (tile_i = 0; bomb_tile_i > 0; tile_i++) {
-            if (!board_tiles[tile_i].is_bomb && !(abs((INT16)player_x - tile_i / board_size) <= 1 && abs((INT16)player_x - tile_i % board_size) <= 1)) {
+            if (!board_tiles[tile_i].is_bomb && !(abs((short)player_x - tile_i / board_size) <= 1 && abs((short)player_x - tile_i % board_size) <= 1)) {
                 bomb_tile_i--;
             }
         }
         board_tiles[tile_i].is_bomb = 1;
     }
 	// DEBUG - bomb view
-    //	for (UINT16 tile_i = 0; tile_i < (UINT16)board_size * board_size; tile_i++) {
+    //	for (unsigned short tile_i = 0; tile_i < (unsigned short)board_size * board_size; tile_i++) {
     //        set_bkg_tiles(tile_i / board_size, tile_i % board_size, 1, 1, nearTiles + board_tiles[tile_i].is_bomb);
     //    }
     // End DEBUG
+	// Click tile
 	click_tile(player_x, player_y);
 }
 
-void win() {
-	write_to_array(game_status, 4, "Win ");
-	// game_status[0] = 0x69;
-	// game_status[1] = 0x7B;
-	// game_status[2] = 0x80;
-	// game_status[3] = 0x32;
-
-	input_enabled = 0;
-}
-
-void lose() {
-	write_to_array(game_status, 4, "Lose");
-	// , 0x81, 0x85, 0x77}
-	// game_status[0] = 0x5E;
-	// game_status[1] = 0x81;
-	// game_status[2] = 0x85;
-	// game_status[3] = 0x77;
-
-	input_enabled = 0;
-}
-
-
-void flag_tile(UINT8 x, UINT8 y) {
-	if (isFirstClick || board_tiles[flatten_coords(x, y, board_size)].is_revealed) return;
-	BOOLEAN is_flagged = board_tiles[flatten_coords(x, y, board_size)].is_flagged;
-	BOOLEAN is_bomb = board_tiles[flatten_coords(x, y, board_size)].is_bomb;
-	if (is_flagged) {
-		board_tiles[flatten_coords(x, y, board_size)].is_flagged = 0;
+// Tile flag status is changed due to a click
+void flag_tile(unsigned char x, unsigned char y) {
+	// Find clicked tile
+	board_tile_t *tile_p = &board_tiles[flatten_coords(x, y, board_size)];
+	// If bombs were not placed yet or tile is revealed return
+	if (isFirstClick || tile_p->is_revealed) return;
+	// Check if tile is bomb
+	bool is_bomb = tile_p->is_bomb;
+	// If tile is flagged
+	if (tile_p->is_flagged) {
+		// Set it not to be
+		tile_p->is_flagged = 0;
+		// Re-draw tile
 		reveal_tile(x - scroll_state[0], y - scroll_state[1], -1);
+		// Flag is available to be re-used 
 		flags_num++;
+		// If tile contains a bomb increment number of unflagged bombs
 		if (is_bomb) flag_balance++;
 	}
+	// If tile isn't flag
 	else {
+		// If no flags are available return
 		if (flags_num <= 0) return;
-		board_tiles[flatten_coords(x, y, board_size)].is_flagged = 1;
+		// Set tile to flagged
+		tile_p->is_flagged = 1;
+		// Re-draw tile
 		reveal_tile(x - scroll_state[0], y - scroll_state[1], 11);
+		// Decrement number of flags
 		flags_num--;
+		// If player is right decrement number of unflagged bombs
 		if (is_bomb) flag_balance--;
+		// if no unflagged bombs are left
 		if (flag_balance == 0) {
-			win();
+			// Win
+			game_over(1);
 		}
-	}
+	} 
 }
 
-
+//.show backround and sprites
 void updateSwitches() {
 	SHOW_BKG;
 	SHOW_SPRITES;
 }
 
+// Update ui to show current status
 void update_ui() {
-	// Status
-	set_bkg_tiles(13, 3, 4, 1, game_status);
-	// time
+	// Update time
 	if (input_enabled) {
-		UINT32 time_since = (UINT32)(time(0)) - start_time;
+		// Track time
+		time_t time_since = time(0) - start_time;
+		// Write time to string
 		number_to_chars(time_passed, 0, 5, time_since);
+		// Draw string
 		set_bkg_tiles(13, 7, 5, 1, time_passed);
 	}
-	// Flags
+	// Update flags left
 	number_to_chars(flags_used, 0, 3, flags_num);
 	set_bkg_tiles(13, 11, 4, 2, flags_used);
-	// Scroll
+	// Update scroll status
+	// X
 	number_to_chars(scroll_show, 0, 2, scroll_state[0]);
+	// Y
 	number_to_chars(scroll_show, 3, 5, scroll_state[1]);
-	set_bkg_tiles(13, 15, 5, 1, scroll_show);
+	set_bkg_tiles(13, 16, 5, 1, scroll_show);
 }
 
-
-void move_select(INT8 y) {
+// Moves the select menu cursor
+void move_select(signed char y) {
+	// Doesn't do anything if menu is closed
 	if (!select_menu_open) return;
+	// Change tracking parameter
 	select_param += y;
+	// Manages scope
 	if (select_param > 3) select_param = 0;
 	if (select_param < 0) select_param = 3;
+	// Moves
 	move_sprite(8, 32, 32 + select_param * 16);
 }
 
+// 0: Easy, 1: Inter, 2: Expert, 3: NiMare
+void set_difficulty(unsigned char new_diff) {
+	switch (new_diff)
+	{
+		case 0:  // Easy
+			write_str_to_tile_array(game_status, 6, d10_name);
+			set_board_size(10, 10);
+			break;
+		case 1:  // Intermediate
+			write_str_to_tile_array(game_status, 6, d16_name);
+			set_board_size(16, 40);
+			break;
+		case 2:  // Expert
+			write_str_to_tile_array(game_status, 6, d22_name);
+			set_board_size(22, 99);
+			break;
+		case 3:  // Nightmare
+			write_str_to_tile_array(game_status, 6, d32_name);
+			set_board_size(32, 200);
+			break;
+		default:  // Nothing
+			set_difficulty(0);
+	}
+	// Draw status
+	set_bkg_tiles(13, 3, 6, 1, game_status);
+}
+
 void select() {
+	// Check if menu open
 	if (select_menu_open == 0) {
+		// When not set it to open
 		select_menu_open = 1;
+		// Disable board input
 		input_enabled = 0;
-		set_bkg_tiles(2, 0, 8, 18, ui_ordered_data);
+		// Draw menu background
+		set_bkg_tiles(2, 0, 8, 18, ui_background_map);
+		// Write text to background using one array
 		unsigned char select_text[6];
-		write_to_array(select_text, 6, "Easy  ");
+		// Write East diff
+		write_str_to_tile_array(select_text, 6, d10_name);
 		set_bkg_tiles(4, 2, 6, 1, select_text);
-		write_to_array(select_text, 6, "Inter ");
+		// Write Inter diff
+		write_str_to_tile_array(select_text, 6, d16_name);
 		set_bkg_tiles(4, 4, 6, 1, select_text);
-		write_to_array(select_text, 6, "Expert");
+		// Write Expert diff
+		write_str_to_tile_array(select_text, 6, d22_name);
 		set_bkg_tiles(4, 6, 6, 1, select_text);
-		write_to_array(select_text, 6, "NiMare");
+		// Write NiMare diff
+		write_str_to_tile_array(select_text, 6, d32_name);
 		set_bkg_tiles(4, 8, 6, 1, select_text);
+		// Hide board sprite
 		set_sprite_prop(0, S_PRIORITY);
 		set_sprite_prop(1, S_PRIORITY);
 		set_sprite_prop(2, S_PRIORITY);
 		set_sprite_prop(3, S_PRIORITY);
+		// Show select cursor
 		set_sprite_prop(8, 0);
-		move_sprite(8, 32, 32);
-		select_param = 0;
+		// Move cursor to last tracked position
+		move_select(0);
 
 	}
 	else {
+		// Track menu as closed
 		select_menu_open = 0;
+		// Allow board input
 		input_enabled = 1;
+		// Show board sprite
 		set_sprite_prop(0, 0);
 		set_sprite_prop(1, 0);
 		set_sprite_prop(2, 0);
 		set_sprite_prop(3, 0);
+		// Move select cursor to hidden origin
 		move_sprite(8, 0, 0);
+		// Draw board to remove drawing of selection menu
 		draw_current_board();
 	}
 
 }
 
-
-void main() {
-
-	init();
-	
-	while(1) {
-		
-		checkInput();
-		updateSwitches();
-		wait_vbl_done();
-		update_ui();
-	}
-	
+// Change board cursor sprites to an offset 
+void anim_sprite(unsigned char state) {
+	// Change offset based of state
+	unsigned char offset = 0;
+	if (state == 1) offset = 4;
+	// Change sprites by offset
+	set_sprite_tile(0, offset);
+	set_sprite_tile(1, offset + 1);
+	set_sprite_tile(2, offset + 2);
+	set_sprite_tile(3, offset + 3);
 }
+
+// Checks user input, should be changed as input is clunky
+void checkInput() {
+	// Timed calls
+	// Input slower is a repeating timer to slow down movement
+	static unsigned char inputSlower = 0;
+	// Increment timer
+	inputSlower++;
+	// Animate board sprite based on frames passed
+	if (inputSlower % 10 == 0) anim_sprite(inputSlower % 20 / 10);
+	// If start is pressed
+	if (joypad() & J_START) {
+			// If select menu isn't open restart to current diff
+			if (!select_menu_open) set_board_size(board_size, bombs_num);
+			// If select menu is open
+			else {
+				// Close select menu
+				select();
+				// Change difficulty
+				set_difficulty(select_param);
+			} 
+	}
+	// If select is pressed
+	if (joypad() & J_SELECT) {
+		// If clicked too soon return
+		if (select_clicked) return;
+		// Track click
+		select_clicked = 1;
+		// Update select screen status
+		select();
+	}
+	// Avoid continous click
+	else select_clicked = 0;
+	// Direction input handling
+	// Avoid clicking to quickly
+	if (!moving_dir || (inputSlower - moving_dir) / 4 == 0) {
+		// If up is clicked
+		if (joypad() & J_UP) {
+			// If can move
+			if (input_enabled) {
+				// Move up
+				move_cursor(0, -1);
+				// Track movement
+				moving_dir = inputSlower;
+			}
+			// If select menu is open
+			if (select_menu_open) {
+				// Move select cursor up
+				move_select(-1);
+				// Track movement
+				moving_dir = inputSlower;	
+			}
+		}
+		// If moves down
+		if (joypad() & J_DOWN) {
+			// If can move
+			if (input_enabled) {
+				// Move down
+				move_cursor(0, 1);
+				// Track movement
+				moving_dir = inputSlower;
+			}
+			// If select menu is open
+			if (select_menu_open) {
+				// Move cursor select down
+				move_select(1);
+				// Track movement
+				moving_dir = inputSlower;	
+			}
+
+
+		}
+		// If can't move on board return (as left and right don't matter otherwise)
+		if (!input_enabled) return;
+		// If left is pressed
+		if (joypad() & J_LEFT) {
+			// Move left
+			move_cursor(-1, 0);
+			// Track movemenet
+			moving_dir = inputSlower;
+
+		}
+		// If right is pressed
+		if (joypad() & J_RIGHT) {
+			// Move right
+			move_cursor(1, 0);
+			// Track movement
+			moving_dir = inputSlower;
+		}
+	}
+	// Not moving
+	if (!(joypad() & J_RIGHT || joypad() & J_LEFT || joypad() & J_UP || joypad() & J_DOWN)) moving_dir = 0;
+	
+	// Click A
+    if (joypad() & J_A) {
+		// If not already clicked
+		if (!a_clicked) {
+			// Clicked
+			a_clicked = 1;
+			// If first click update bombs, if not click on cursor location in board
+			if (isFirstClick) first_tile();
+			else click_tile(cursor_board_x(), cursor_board_y());	
+		}
+    }
+	// If not clicked then not clicked
+	else a_clicked = 0;
+	// click B
+	if (joypad() & J_B) {
+		// If wasn't clicked
+		if (!b_clicked) {
+			// Clicked
+			b_clicked = 1;
+			// Flag cursor tile
+			flag_tile(cursor_board_x(), cursor_board_y());
+		}
+	}
+	// If not clicked then not clicked
+	else b_clicked = 0;
+}
+
 
 void init() {
 	
@@ -447,141 +686,57 @@ void init() {
 	set_bkg_data(50, 96, ChicagoFont_data);	// Load ChicagoFont to memory, 96 tiles
 	set_bkg_data(146, 9, ui_background_data);	// Load ui background to memory, 96 tiles
 	// Initialize cursor sprite
-	UINT8 num_cursor_sprites = 8;
+	unsigned char num_cursor_sprites = 8;
 	set_sprite_data(0, num_cursor_sprites, sprites_data);
 	set_sprite_data(num_cursor_sprites, 1, mode_selector_data);
 	// Setting cursor sprites to sprite memory
-	for (UINT8 i = 0; i < num_cursor_sprites + 1; i++) {
+	for (unsigned char i = 0; i < num_cursor_sprites + 1; i++) {
 		set_sprite_tile(i, i);
 	}
 	set_sprite_prop(8, S_PRIORITY);
-	// Init board
-	set_board_size(10, 10);
 	// Init UI
 	// Background
-	for (UINT8 j = 0; j < 144; j++) {
-		ui_ordered_data[j] = ui_background_map[j] + 146;
-	}
-	set_bkg_tiles(12, 0, 8, 18, ui_ordered_data);
+	set_bkg_tiles(12, 0, 8, 18, ui_background_map);
 	// Text
 
-	unsigned char status[6];
-	write_to_array(status, 6, "Status");
-	unsigned char time[4];
-	write_to_array(time, 4, "Time");
-	unsigned char flags[5];
-	write_to_array(flags, 5, "Flags");
-	unsigned char scroll[6];
-	write_to_array(scroll, 6, "Scroll");
+	unsigned char ui_consts[6];
 	// Status
-	set_bkg_tiles(13, 1, 6, 1, status);
-	set_bkg_tiles(13, 3, 4, 1, game_status);
+	write_str_to_tile_array(ui_consts, 6, "Status");
+	set_bkg_tiles(13, 1, 6, 1, ui_consts);
+
 	// time
-	set_bkg_tiles(13, 5, 4, 1, time);
-	set_bkg_tiles(13, 7, 5, 1, time_passed);
+	write_str_to_tile_array(ui_consts, 4, "Time");
+	set_bkg_tiles(13, 5, 4, 1, ui_consts);
+
 	// Flags
-	set_bkg_tiles(13, 9, 5, 1, flags);
-	set_bkg_tiles(13, 11, 4, 2, flags_used);
-	// Scroll
-	set_bkg_tiles(13, 14, 6, 1, scroll);
-	set_bkg_tiles(13, 15, 5, 1, scroll_show);
-}
-
-void checkInput() {
-	// Timed calls
-	static UINT8 inputSlower = 0;
-	inputSlower++;
-	if (inputSlower % 30 == 0) anim_sprite(inputSlower % 60 / 30);
-	if (joypad() & J_START) {
-			if (!select_menu_open) set_board_size(board_size, bombs_num);
-			else {  // Restarting with menu open
-				select();
-				switch (select_param)
-				{
-				case 0:  // Easy
-					set_board_size(10, 10);
-					break;
-				case 1:  // Intermediate
-					set_board_size(16, 40);
-					break;
-				case 2:  // Expert
-					set_board_size(22, 99);
-					break;
-				case 3:  // Nightmare
-					set_board_size(32, 200);
-					break;
-				default:  // Nothing
-					break;
-				}
-			} 
-	}
-	if (joypad() & J_SELECT) {
-		if (select_clicked) return;
-		select_clicked = 1;
-		select();
-	}
-	else select_clicked = 0;
-	if (!moving_dir || (inputSlower - moving_dir) % 12 == 0) {
-		if (joypad() & J_UP) {
-			if (input_enabled) {
-				move_cursor(0, -1, 1);
-				moving_dir = inputSlower;	
-			}
-
-			if (select_menu_open) {
-				move_select(-1);
-				moving_dir = inputSlower;	
-			}
-		}
-		if (joypad() & J_DOWN) {
-			if (input_enabled) {
-				move_cursor(0, 1, 1);
-				moving_dir = inputSlower;
-			}
-			if (select_menu_open) {
-				move_select(1);
-				moving_dir = inputSlower;	
-			}
-
-
-		}
-		if (!input_enabled) return;
-		if (joypad() & J_LEFT) {
-			move_cursor(-1, 0, 1);
-			moving_dir = inputSlower;
-
-		}
-		if (joypad() & J_RIGHT) {
-			move_cursor(1, 0, 1);
-			moving_dir = inputSlower;
-		}
-	}
-	// Not moving
-	if (!(joypad() & J_RIGHT || joypad() & J_LEFT || joypad() & J_UP || joypad() & J_DOWN)) moving_dir = 0;
-	if (inputSlower % 4 != 0) return;
+	write_str_to_tile_array(ui_consts, 5, "Flags");
+	set_bkg_tiles(13, 9, 5, 1, ui_consts);
 	
-    if (joypad() & J_A) {
-		if (!a_clicked) {
-			a_clicked = 1;
-			if (isFirstClick) first_tile();
-			else click_tile(cursor_board_x(), cursor_board_y());	
-		}
-    }
-	else a_clicked = 0;
-	if (joypad() & J_B) {
-		if (!b_clicked) {
-			b_clicked = 1;
-			flag_tile(cursor_board_x(), cursor_board_y());
-		}
-	}
-	else b_clicked = 0;
+	// Scroll
+	write_str_to_tile_array(ui_consts, 6, "Scroll");
+	set_bkg_tiles(13, 14, 6, 1, ui_consts);
+
+	// Init board (Important to do after UI init so Status will be written. Cost me like half an hour)
+	select_param = 0;
+	set_difficulty(select_param);
 }
 
-void anim_sprite(UINT8 state) {
-	UINT8 offset = 0;
-	if (state == 1) offset = 4;
-	set_sprite_tile(0, offset);
-	set_sprite_tile(1, offset + 1);
-	set_sprite_tile(2, offset + 2);
-	set_sprite_tile(3, offset + 3);
+// Main function that is run
+void main() {
+
+	// Initialize gameboy and other variables
+	init();
+	
+	// Game loop
+	while(1) {
+		
+		// Check for player input 
+		checkInput();
+		// Update gameboy switches
+		updateSwitches();
+		// Something (not sure oops)
+		wait_vbl_done();
+		// Update UI
+		update_ui();
+	}
 }
