@@ -24,8 +24,10 @@
  *  - Add music
  *  - Add gameboy color colors, plan is to make every numbered tile have a different color 
  *  - Invert font
+ *  - Rework direction input handling
  * */
 
+// Declaring function as it and reveal_tile call eachother
 void click_tile(unsigned char, unsigned char);
 
 
@@ -62,7 +64,7 @@ const char *d32_name = "NiMare";  // Nightmare string name
 unsigned char time_passed[5];  // UI tile string value of how much time passed since game start 
 const unsigned char time_passed_length = 5;  // length of time_passed
 unsigned char game_status[6]; // UI tile string value of the game's status (diff, won, lost)
-const unsigned char game_status_length = 4;  // length of game status
+const unsigned char game_status_length = 6;  // length of game status
 unsigned char flags_used[8];  // UI tile string value of how much flags are left out of total
 const unsigned char flags_used_length = 8;  // length of flag used string
 unsigned char scroll_show[5];  // UI tile string value of current string scroll
@@ -97,9 +99,9 @@ void write_str_to_tile_array(unsigned char* array, unsigned char array_size, con
 // For winning and losing
 void game_over(bool isWin) {
 	// Update status
-	write_str_to_tile_array(game_status, game_status_length, isWin ? "Win " : "Lose");
+	write_str_to_tile_array(game_status, game_status_length, isWin ? "Win   " : "Lose  ");
 	// Display status
-	set_bkg_tiles(13, 3, 4, 1, game_status);
+	set_bkg_tiles(13, 3, 6, 1, game_status);
 	// Disable input
 	input_enabled = 0;
 }
@@ -353,6 +355,11 @@ void set_board_size(unsigned char new_size, unsigned char num_bombs) {
 
 // First player click, initializing bombs
 void first_tile() {
+	// If gameboy color
+	if (_cpu == CGB_TYPE) {
+		// Action is long and stops progress, fast processing is worth it
+		cpu_fast();
+	}
 	// Set first click to pressed
 	isFirstClick = 0;
 	// Bomb generation script. Not working (not factoring player position and rarely doesn't generate enough bombs), and fairly slow. Will not be documented as of now
@@ -388,6 +395,11 @@ void first_tile() {
     //        set_bkg_tiles(tile_i / board_size, tile_i % board_size, 1, 1, nearTiles + board_tiles[tile_i].is_bomb);
     //    }
     // End DEBUG
+	// If gameboy color
+	if (_cpu == CGB_TYPE) {
+		// Stop fast processing
+		cpu_slow();
+	}
 	// Click tile
 	click_tile(player_x, player_y);
 }
@@ -689,6 +701,8 @@ void init() {
 	NR52_REG = 0x8F;	// Turn on the sound
 	NR51_REG = 0x11;	// Enable the sound channels
 	NR50_REG = 0x77;	// Increase the volume to its max
+	// GBC Support
+	if (_cpu == CGB_TYPE) cgb_compatibility();
 	// Init map
 	set_bkg_data(0, 49, mine_tile_sheet_data);	// Load Minetiles to memory
 	set_bkg_data(50, 96, ChicagoFont_data);	// Load ChicagoFont to memory, 96 tiles
