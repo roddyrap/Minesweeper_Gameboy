@@ -20,10 +20,10 @@
  * Known bugs and issues:
  * If a flag is placed on an empty tile, when it gets autoclicked the game will hang.
  * Roadmap:
- *  - Fix bomb generation
  *  - Add title screen that leads to diff select (might take a while, need a fullscreen image)
  *  - Add music
  *  - Add gameboy color colors, plan is to make every numbered tile have a different color 
+ *  - Invert font
  * */
 
 void click_tile(unsigned char, unsigned char);
@@ -356,23 +356,31 @@ void first_tile() {
 	// Set first click to pressed
 	isFirstClick = 0;
 	// Bomb generation script. Not working (not factoring player position and rarely doesn't generate enough bombs), and fairly slow. Will not be documented as of now
-	unsigned char player_x = cursor_board_x();
-	unsigned char player_y = cursor_board_y();
-	bool on_row_edge = player_y == 0 || player_y == board_size - 1;
-    bool on_col_edge = player_x == 0 || player_x == board_size - 1;
-    unsigned char protected_tiles_num = 9;
-    if (on_row_edge && on_col_edge) protected_tiles_num = 4;
-    else if (on_row_edge || on_col_edge) protected_tiles_num = 6;
+	unsigned char player_x = cursor_board_x();  // Player board position X
+	unsigned char player_y = cursor_board_y();  // Player board position Y
+	bool on_row_edge = player_y == 0 || player_y == board_size - 1;  // Check if tile is on row edge
+    bool on_col_edge = player_x == 0 || player_x == board_size - 1;  // Check if tile is on column edge
+    unsigned char protected_tiles_num = 9;  // Number of tiles surrounding (and including) the cursor, default is nine
+    if (on_row_edge && on_col_edge) protected_tiles_num = 4;  // If both on row on column edge (in a corener) then 4 tiles
+    else if (on_row_edge || on_col_edge) protected_tiles_num = 6;  // If only on row or column edge then 6 tiles
 
+	// Loop for each bomb
     for (unsigned short bomb_i = 0; bomb_i < bombs_num; bomb_i++) {
-        unsigned short bomb_tile_i = ((unsigned short)rand() * (unsigned char)rand()) % ((unsigned short)board_size * board_size - protected_tiles_num - bomb_i);
+		// Available tiles from beginning to end, incremented to disallow zero as the for loop won't work
+        unsigned short bomb_tile_i = ((unsigned short)rand() * (unsigned char)rand()) % ((unsigned short)board_size * board_size - protected_tiles_num - bomb_i) + 1;
 
+		// Index of tile to check availability
         unsigned short tile_i;
+		// Loop available tiles until ending
         for (tile_i = 0; bomb_tile_i > 0; tile_i++) {
-            if (!board_tiles[tile_i].is_bomb && !(abs((short)player_x - tile_i / board_size) <= 1 && abs((short)player_x - tile_i % board_size) <= 1)) {
-                bomb_tile_i--;
-            }
+			// If tile isn't available continue
+			if (board_tiles[tile_i].is_bomb || (abs((short)player_x - tile_i % board_size) <= 1 && abs((short)player_y - tile_i / board_size) <= 1)) continue;
+            // Lower available requirement
+			bomb_tile_i--;
         }
+		// Decrement to match bomb_tile increment
+		tile_i--;
+		// Set tile is bomb
         board_tiles[tile_i].is_bomb = 1;
     }
 	// DEBUG - bomb view
@@ -567,7 +575,7 @@ void checkInput() {
 	// If start is pressed
 	if (joypad() & J_START) {
 			// If select menu isn't open restart to current diff
-			if (!select_menu_open) set_board_size(board_size, bombs_num);
+			if (!select_menu_open) set_difficulty(select_param);
 			// If select menu is open
 			else {
 				// Close select menu
