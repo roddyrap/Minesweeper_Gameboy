@@ -19,7 +19,13 @@ Instead of using the mouse and left/right clicks the player uses the d-pad and t
 - B is used to flag and unflag tiles
 - All mines need to be flagged to win.
 - Start is used to restart the game.
-- Select opens a difficulty select screen
+- Select opens a difficulty select screen.
+
+## Board sizes
+1. Easy: 10x10 with 10 bombs.
+2. Intermediate (Inter): 16x16 with 40 bombs.
+3. Expert: 22x22 with 99 bombs.
+4. Nightmare (NiMare): 32x32 with 200 bombs.
 
 WARNING: While large board sizes are available the Gameboy takes a lot of time to place the bombs, it might freeze for around a minute and a half while placing the bombs, but should then work clearly.
 
