@@ -47,7 +47,6 @@ const unsigned short mine_tiles_cgb_palette[] = {
 	RGB_WHITE, RGB_DARKGRAY, RGB_DARKRED, RGB_BLACK,  // 5 neighbours
 	RGB_WHITE, RGB_DARKGRAY, RGB_CYAN, RGB_BLACK,  // 6 neighbours
 	RGB_WHITE, RGB_DARKGRAY, RGB_PURPLE, RGB_BLACK,  // 7 neighbours
-	RGB_BLACK, RGB_DARKGRAY, RGB_LIGHTGRAY, RGB_BLACK,  // 8 neighbours
 	};
 
 // Sprite palette (only one is required and used)
@@ -169,6 +168,10 @@ void reveal_tile(unsigned char x, unsigned char y, signed char tile_num) {
 		// If empty. I know can be simplified to smaller and greater then but more intuitive this way
 		if (tile_num == 0 || tile_num == -1) {
 			// Regular palette if unique
+			palette_ind = 0;
+		}
+		// 8 uses default palette colors
+		else if (tile_num == 8) {
 			palette_ind = 0;
 		}
 		// Check if flag
@@ -758,7 +761,7 @@ void init() {
 	// GBC Support
 	if (_cpu == CGB_TYPE) {
 		// Setting up CGB palettes, 0 is used as default and overrides it as well
-		set_bkg_palette(0, 7, mine_tiles_cgb_palette);
+		set_bkg_palette(0, 8, mine_tiles_cgb_palette);
 		// Sprite Palette
 		set_sprite_palette(0, 1, sprite_palette);
 	}
@@ -771,7 +774,7 @@ void init() {
 	set_sprite_data(0, num_cursor_sprites, sprites_data);
 	set_sprite_data(num_cursor_sprites, 1, mode_selector_data);
 	// Setting cursor sprites to sprite memory
-	for (unsigned char i = 0; i < num_cursor_sprites + 1; i++) {
+	for (unsigned char i = 0; i <= num_cursor_sprites; i++) {
 		set_sprite_tile(i, i);
 	}
 	set_sprite_prop(8, S_PRIORITY);
