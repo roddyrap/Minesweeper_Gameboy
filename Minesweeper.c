@@ -1,7 +1,9 @@
 #include <gb/gb.h>
+#include <gb/cgb.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <ctype.h>
+#include <limits.h>
 #include "rand.h"
 #include "time.h"
 #include "stdbool.h"
@@ -87,7 +89,9 @@ const unsigned char flags_used_length = 8;  // length of flag used string
 unsigned char scroll_show[5];  // UI tile string value of current string scroll
 const unsigned char scroll_show_length = 5;  // length of scroll status string
 
+unsigned char time_overflow_tracker = 0;
 time_t start_time;  // Game start time, to track in UI
+time_t previous_time_since;
 bool input_enabled;  // Will player input move the sprite
 bool a_clicked;  // Is a clicked
 bool select_clicked;  // Is select clicked
@@ -356,7 +360,11 @@ void number_to_chars(unsigned char *array, unsigned char arr_start, unsigned cha
 // Change board size and number of bombs, functions as a reset
 void set_board_size(unsigned char new_size, unsigned char num_bombs) {
 	// Track time
-	start_time = time(0);
+	start_time = clock();
+    // Resetting previous time
+    previous_time_since = 0;
+    // Resetting time overflow tracker
+    time_overflow_tracker = 0;
 	// Track board size
 	board_size = new_size;
 	// Track number of bombs
@@ -403,47 +411,53 @@ void set_board_size(unsigned char new_size, unsigned char num_bombs) {
 
 // First player click, initializing bombs
 void first_tile() {
-	// If gameboy color
+	// If Game Boy Color
 	if (_cpu == CGB_TYPE) {
 		// Action is long and stops progress, fast processing is worth it
 		cpu_fast();
 	}
 	// Set first click to pressed
 	isFirstClick = 0;
-	// Bomb generation script. Not working (not factoring player position and rarely doesn't generate enough bombs), and fairly slow. Will not be documented as of now
+	// Bomb generation script - Uses Reservoir sampling to create the random locations
+    // Getting the number of protected tiles
 	unsigned char player_x = cursor_board_x();  // Player board position X
 	unsigned char player_y = cursor_board_y();  // Player board position Y
-	bool on_row_edge = player_y == 0 || player_y == board_size - 1;  // Check if tile is on row edge
-    bool on_col_edge = player_x == 0 || player_x == board_size - 1;  // Check if tile is on column edge
-    unsigned char protected_tiles_num = 9;  // Number of tiles surrounding (and including) the cursor, default is nine
-    if (on_row_edge && on_col_edge) protected_tiles_num = 4;  // If both on row on column edge (in a corener) then 4 tiles
-    else if (on_row_edge || on_col_edge) protected_tiles_num = 6;  // If only on row or column edge then 6 tiles
 
-	// Loop for each bomb
-    for (unsigned short bomb_i = 0; bomb_i < bombs_num; bomb_i++) {
-		// Available tiles from beginning to end, incremented to disallow zero as the for loop won't work
-        unsigned short bomb_tile_i = ((unsigned short)rand() * (unsigned char)rand()) % ((unsigned short)board_size * board_size - protected_tiles_num - bomb_i) + 1;
-
-		// Index of tile to check availability
-        unsigned short tile_i;
-		// Loop available tiles until ending
-        for (tile_i = 0; bomb_tile_i > 0; tile_i++) {
-			// If tile isn't available continue
-			if (board_tiles[tile_i].is_bomb || (abs((short)player_x - tile_i % board_size) <= 1 && abs((short)player_y - tile_i / board_size) <= 1)) continue;
-            // Lower available requirement
-			bomb_tile_i--;
+    // This method requires an array to save the locations in. This wastes quite a lot of memory but is much more efficient
+    unsigned short* bomb_locations;
+    // Formatting the array to the correct size
+    bomb_locations = malloc(bombs_num);
+    unsigned short protected_modifier = 0;
+    // Setting the starting values to the location array
+    for (unsigned int i = 0; i < bombs_num; i++) {
+        // Checking if the tile is protected. If it is this tile will be skipped (with the incrementation of protected_modifier) and so on.
+        while (abs((short)player_x - (i + protected_modifier) % board_size) <= 1 && abs((short)player_y - (i + protected_modifier) / board_size) <= 1) {
+            protected_modifier++;
         }
-		// Decrement to match bomb_tile increment
-		tile_i--;
-		// Set tile is bomb
-        board_tiles[tile_i].is_bomb = 1;
+        bomb_locations[i] = i + protected_modifier;
+    }
+    // Iterating over every other available number
+    for (unsigned int i = bombs_num; i + protected_modifier < board_size * board_size; i++) {
+        // Checking if its protected
+        while (abs((short)player_x - (i + protected_modifier) % board_size) <= 1 && abs((short)player_y - (i + protected_modifier) / board_size) <= 1) {
+            protected_modifier++;
+        }
+        // Replacing it with a previously in number
+        unsigned int j = rand() % i;
+        if (j < bombs_num) {
+            bomb_locations[j] = i + protected_modifier;
+        }
+    }
+    // Iterating over the chosen numbers in order to insert them to the board matrix
+    for (int i = 0; i < bombs_num; i++) {
+        board_tiles[bomb_locations[i]].is_bomb = 1;
     }
 	// DEBUG - bomb view
     //	for (unsigned short tile_i = 0; tile_i < (unsigned short)board_size * board_size; tile_i++) {
     //        set_bkg_tiles(tile_i / board_size, tile_i % board_size, 1, 1, nearTiles + board_tiles[tile_i].is_bomb);
     //    }
     // End DEBUG
-	// If gameboy color
+	// If Game Boy Color
 	if (_cpu == CGB_TYPE) {
 		// Stop fast processing
 		cpu_slow();
@@ -502,9 +516,19 @@ void update_ui() {
 	// Update time
 	if (input_enabled) {
 		// Track time
-		time_t time_since = time(0) - start_time;
-		// Write time to string
-		number_to_chars(time_passed, 0, 5, time_since);
+		time_t time_since = clock() - start_time;
+        // If the current time passed is smaller than previously, an overflow had occurred.
+        if (time_since < previous_time_since) {
+            // Logging the overflow
+            time_overflow_tracker += 1;
+        }
+        // Log the current time passed for the future
+        previous_time_since = time_since;
+		// Write time to string - The cast to long is in order to pass the 16 bit overflow the clock has, I then add the
+        // current time in clock cycles and get the seconds as unsigned longs in it.
+        // The cast to unsigned short is a lazy way to verify the time will never demand more than 5 characters, which
+        // Will be more than is allocated to it on the screen. Time caps at 65546 seconds, and I'm fine with it.
+		number_to_chars(time_passed, 0, 5, (unsigned short)(((unsigned long)time_overflow_tracker * USHRT_MAX + time_since) / CLOCKS_PER_SEC));
 		// Draw string
 		set_bkg_tiles(13, 7, 5, 1, time_passed);
 	}

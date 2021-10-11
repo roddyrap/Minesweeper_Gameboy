@@ -1,7 +1,7 @@
 # Minesweeper Gameboy
 This is a port/demake of the Microsoft game Minesweeper. The game works both for the Gameboy and the Gameboy colors, with enhanced colors for the latter.
 
-While I do have a Gameboy (Color) I wasn't able to test it on official hardware due to a lack of ability to load it to a cartridge. The ROM file was tested on [BGB](https://bgb.bircd.org/) and [Emuclius](https://emulicious.net/).
+While I do have a Gameboy (Color) I wasn't able to test it on official hardware due to a lack of ability to load it to a cartridge. The ROM file was tested on [BGB](https://bgb.bircd.org/) and [Emulicious](https://emulicious.net/).
 
 # Gameplay (from Wikipedia)
 In Minesweeper, mines (that resemble naval mines in the classic theme) are scattered throughout a board, which is divided into cells. Cells have three states: uncovered, covered and flagged. A covered cell is blank and clickable, while an uncovered cell is exposed. Flagged cells are those marked by the player to indicate a potential mine location.
@@ -27,8 +27,7 @@ Instead of using the mouse and left/right clicks the player uses the d-pad and t
 3. Expert: 22x22 with 99 bombs.
 4. Nightmare (NiMare): 32x32 with 200 bombs.
 
-WARNING: While large board sizes are available the Gameboy takes a lot of time to place the bombs, it might freeze for around a minute and a half while placing the bombs, but should then work clearly.
-
+Should I add more?
 # Use instructions
 The latest version should be available in the releases tab. Downloading the ROM from there is easy and should let you play immediately.
 
