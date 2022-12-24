@@ -46,21 +46,21 @@ If you want to build the files yourself it's possible.
 
 ### GBC
 
-![GameStartEasy](Images/GBC/GameStartEasy.bmp)
-![GameMidEasy](Images/GBC/GameMidEasy.bmp)
-![GameExpertEnd](Images/GBC/GameExpertEnd.bmp)
-![GameExpertEnd](Images/GBC/SelectMenu.bmp)
+![GameStartEasy](Images/GBC/GameStartEasy.png)
+![GameMidEasy](Images/GBC/GameMidEasy.png)
+![GameExpertEnd](Images/GBC/GameExpertEnd.png)
+![GameExpertEnd](Images/GBC/SelectMenu.png)
 
 ### GB
 
-![GameStartEasy](Images/GB/GameStartEasy.bmp)
-![GameMidEasy](Images/GB/GameMidEasy.bmp)
-![GameExpertEnd](Images/GB/GameExpertEnd.bmp)
-![GameExpertEnd](Images/GB/SelectMenu.bmp)
+![GameStartEasy](Images/GB/GameStartEasy.png)
+![GameMidEasy](Images/GB/GameMidEasy.png)
+![GameExpertEnd](Images/GB/GameExpertEnd.png)
+![GameExpertEnd](Images/GB/SelectMenu.png)
 
 ## Bug reports and support
 
-Feel free to submit all bug reports and code changes ideas and requests to the corresponding tabs in GitHub. 
+Feel free to submit all bug reports and code changes ideas and requests to the corresponding tabs in GitHub.
 
 ## License
 
