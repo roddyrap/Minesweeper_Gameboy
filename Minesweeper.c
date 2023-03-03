@@ -24,7 +24,6 @@
  * Known bugs and issues:
  * - None for now!
  * Roadmap:
- * - Make scrolling warp.
  * - Redesign bomb.
  * - Redesign cursor animation and add more frames.
  * - Visualize screen scrolling better.
@@ -83,7 +82,11 @@ const uint8_t SCREEN_TILE_PIXELS_LENGTH      = 8;
 
 // Unique tilemap offsets.
 const uint8_t BOMB_INDICATOR = 10;
-const int8_t FLAG_OFFSET    = 11;
+const int8_t FLAG_OFFSET     = 11;
+
+// Time constants. Max determined by number of characters.
+const uint32_t MAX_TIME = 99999;
+
 
 // Difficulty names.
 const char D10_NAME[] = "Easy  ";
@@ -100,14 +103,16 @@ uint8_t flags_used[8]  = { 0 };
 uint8_t scroll_show[5] = { 0 };
 
 // Game states.
-bool input_enabled    = false;
-bool select_menu_open = false;
-bool is_first_click     = false;
+bool board_manipulation_enabled = true;
+bool counting_time              = false;
+bool select_menu_open           = false;
+bool is_first_click             = false;
 
 // Time management.
 uint8_t time_overflow_tracker = 0;
 time_t start_time             = 0;
 time_t previous_time_since    = 0;
+uint32_t last_calc_time   = 0;
 
 // Button states.
 bool a_clicked      = false;
@@ -178,10 +183,13 @@ void game_over(bool is_win)
 {
     // Update status.
     write_str_to_tile_array(game_status, sizeof(game_status), is_win ? "Win   " : "Lose  ");
+
     // Display status.
     set_bkg_tiles(13, 3, 6, 1, game_status);
-    // Disable input.
-    input_enabled = 0;
+
+    // Disable interactivity.
+    board_manipulation_enabled = false;
+    counting_time = false;
 }
 
 // Takes 2D coordinates and flattens them to 1D.
@@ -352,7 +360,6 @@ void move_sprite_grid(uint8_t new_x, uint8_t new_y)
             sprite_ind,
             new_x * BOARD_TILE_PIXELS_LENGTH + ORIGIN_X_OFFSET + SCREEN_TILE_PIXELS_LENGTH * (sprite_ind % 2),
             new_y * BOARD_TILE_PIXELS_LENGTH + ORIGIN_Y_OFFSET + SCREEN_TILE_PIXELS_LENGTH * (sprite_ind / 2));
-
     }
 }
 
@@ -483,10 +490,10 @@ void click_tile(uint8_t x, uint8_t y)
 // Change board size and number of bombs, functions as a reset.
 void set_board_size(uint8_t new_size, uint8_t num_bombs)
 {
-    // Reset time.
-    start_time = clock();
+    // Reset time
     previous_time_since = 0;
     time_overflow_tracker = 0;
+    last_calc_time = 0;
 
     // Reset board data.
     board_size = new_size;
@@ -498,7 +505,7 @@ void set_board_size(uint8_t new_size, uint8_t num_bombs)
     a_clicked = 0;
     b_clicked = 0;
     is_moving = false;
-    input_enabled = 1;
+    board_manipulation_enabled = true;
 
     // Close select menu.
     select_menu_open = 0;
@@ -524,6 +531,7 @@ void set_board_size(uint8_t new_size, uint8_t num_bombs)
     if (board_tiles != NULL)
     {
         free(board_tiles);
+        board_tiles = NULL;
     }
 
     board_tiles = (board_tile_t*)malloc(board_size * board_size);
@@ -562,10 +570,7 @@ void first_tile()
     uint8_t player_y = cursor_board_y();
 
     // This method requires an array to save the locations in. This wastes quite a lot of memory but is much more efficient.
-    uint16_t* bomb_locations;
-
-    // Formatting the array to the correct size.
-    bomb_locations = (uint16_t*)malloc(bombs_num);
+    uint16_t* bomb_locations = (uint16_t*)malloc(bombs_num);
     if (bomb_locations == NULL)
     {
         crash(1);
@@ -609,12 +614,17 @@ void first_tile()
     }
 
     free(bomb_locations);
+    bomb_locations = NULL;
 
     // Stop fast processing.
     if (_cpu == CGB_TYPE)
     {
         cpu_slow();
     }
+
+    // Start time measurement.
+    start_time = clock();
+    counting_time = true;
 
     // Click tile.
     click_tile(player_x, player_y);
@@ -666,7 +676,7 @@ void flag_tile(uint8_t x, uint8_t y)
     }
 }
 
-//.show backround and sprites.
+// Show backround and sprites.
 void update_switches()
 {
     SHOW_BKG;
@@ -677,25 +687,35 @@ void update_switches()
 void update_ui()
 {
     // Update time.
-    if (input_enabled && !select_menu_open)
+    if (!select_menu_open)
     {
-        // Track time.
-        time_t time_since = clock() - start_time;
-        // If the current time passed is smaller than previously, an overflow had occurred.
-        if (time_since < previous_time_since)
+        if (counting_time)
         {
-            // Logging the overflow.
-            time_overflow_tracker += 1;
+            // Track time.
+            time_t time_since = clock() - start_time;
+
+            // If the current time passed is smaller than previously, an overflow had occurred.
+            if (time_since < previous_time_since)
+            {
+                // Logging the overflow.
+                time_overflow_tracker += 1;
+            }
+
+            // Log the current time passed for the future.
+            previous_time_since = time_since;
+
+            // Cast to uint32_t to enable values larger than the internal gameboy overflow. Multiply the
+            // overflow tracker to get actual overflowed time in seconds and add current time in seconds to it.
+            // If time is too large to present in the board, cap it.
+            last_calc_time = ((uint32_t)time_overflow_tracker * USHRT_MAX + time_since) / CLOCKS_PER_SEC;
+            if (last_calc_time > MAX_TIME)
+            {
+                last_calc_time = MAX_TIME;
+            }
         }
 
-        // Log the current time passed for the future.
-        previous_time_since = time_since;
-        // Write time to string - The cast to int32_t is in order to pass the 16 bit overflow the clock has, I then add the.
-        // current time in clock cycles and get the seconds as unsigned longs in it.
-        // The cast to uint16_t is a lazy way to verify the time will never demand more than 5 characters, which.
-        // Will be more than is allocated to it on the screen. Time caps at 65546 seconds, and I'm fine with it.
-        number_to_chars(time_passed, 0, 5, (uint16_t)(((uint32_t)time_overflow_tracker * USHRT_MAX + time_since) / CLOCKS_PER_SEC));
         // Draw string.
+        number_to_chars(time_passed, 0, 5, last_calc_time);
         set_bkg_tiles(13, 7, 5, 1, time_passed);
     }
 
@@ -851,7 +871,7 @@ void handle_movement(uint8_t x_movement, uint8_t y_movement)
     {
         move_select(y_movement);
     }
-    else if (input_enabled)
+    else
     {
         move_cursor(x_movement, y_movement);
     }
@@ -916,7 +936,7 @@ void handle_input()
             {
                 first_tile();
             }
-            else
+            else if (board_manipulation_enabled)
             {
                 click_tile(cursor_board_x(), cursor_board_y());
             }
@@ -933,16 +953,19 @@ void handle_input()
     if (joypad_status & J_B)
     {
         // If wasn't clicked.
-        if (!b_clicked)
+        if (!b_clicked && board_manipulation_enabled)
         {
-            b_clicked = 1;
+            b_clicked = true;
 
             flag_tile(cursor_board_x(), cursor_board_y());
         }
     }
 
     // If not clicked then not clicked.
-    else b_clicked = 0;
+    else
+    {
+        b_clicked = false;
+    }
 }
 
 
