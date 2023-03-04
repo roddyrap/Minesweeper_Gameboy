@@ -112,7 +112,7 @@ bool is_first_click             = false;
 uint8_t time_overflow_tracker = 0;
 time_t start_time             = 0;
 time_t previous_time_since    = 0;
-uint32_t last_calc_time   = 0;
+uint32_t game_time            = 0;
 
 // Button states.
 bool a_clicked      = false;
@@ -136,28 +136,28 @@ board_tile_t *board_tiles = NULL;
 // Game information
 uint16_t bombs_num          = 0;
 uint16_t flags_num          = 0;
-uint16_t correct_flags_left = 0;
+uint16_t unflagged_bombs = 0;
 
 // Takes a string (str) and writes it's ascii value as tiles to another array (array), at the specified size (array_size).
 void write_str_to_tile_array(uint8_t* array, uint8_t array_size, const char* str)
 {
-    for (uint8_t i = 0; i < array_size; i++)
+    for (uint8_t char_index = 0; char_index < array_size; char_index++)
     {
-        if (str[i] == 0)
+        if (str[char_index] == 0)
         {
             break;
         }
 
-        array[i] = str[i] - ' ' + FONT_START;
+        array[char_index] = str[char_index] - ' ' + FONT_START;
     }
 }
 
 // Take a number (8-bit, num) and write it to an array (array) from index arr_start to arr_end.
 void number_to_chars(uint8_t *array, uint8_t arr_start, uint8_t arr_end, uint32_t num)
 {
-    for (uint8_t neg_ind = 1; neg_ind <= arr_end - arr_start; neg_ind++)
+    for (uint8_t neg_index = 1; neg_index <= arr_end - arr_start; neg_index++)
     {
-        array[arr_end - neg_ind] = num % 10 + FONT_START + '0' - ' ';
+        array[arr_end - neg_index] = num % 10 + FONT_START + '0' - ' ';
         num = num / 10;
     }
 }
@@ -228,16 +228,16 @@ uint8_t bombs_near_tile(uint8_t tile_x, uint8_t tile_y)
 
     // Loop over nearby tiles and find bombs.
     uint8_t num_bombs = 0;
-    for (int16_t i = -1; i < 2; i++)
+    for (int16_t x_modifier = -1; x_modifier < 2; x_modifier++)
     {
-        for (int16_t j = -1; j < 2; j++)
+        for (int16_t y_modifier = -1; y_modifier < 2; y_modifier++)
         {
-            if (!coords_in_board(tile_x + i, tile_y + j))
+            if (!coords_in_board(tile_x + x_modifier, tile_y + y_modifier))
             {
                 continue;
             }
 
-            num_bombs += board_tiles[flatten_coords(i + tile_x, j + tile_y, board_size)].is_bomb;
+            num_bombs += board_tiles[flatten_coords(x_modifier + tile_x, y_modifier + tile_y, board_size)].is_bomb;
         }
     }
 
@@ -287,15 +287,15 @@ void reveal_tile(uint8_t x, uint8_t y, int8_t tile_num)
 // Draws the whole board, factoring in the screen scroll.
 void draw_current_board()
 {
-    for (uint16_t i = 0; i < NUM_COLS; i++)
+    for (uint8_t x_modifier = 0; x_modifier < NUM_COLS; x_modifier++)
     {
         // The X position of the drawn tiles with scroll.
-        uint8_t new_x = i + scroll_state[0];
+        uint8_t new_x = x_modifier + scroll_state[0];
 
-        for (uint8_t j = 0; j < NUM_ROWS; j++)
+        for (uint8_t y_modifier = 0; y_modifier < NUM_ROWS; y_modifier++)
         {
             // The y position of the drawn tile with scroll.
-            uint8_t new_y = j + scroll_state[1];
+            uint8_t new_y = y_modifier + scroll_state[1];
             // vram offset.
             int8_t tile_offset = -1;
             if (board_tiles[flatten_coords(new_x, new_y, board_size)].is_flagged)
@@ -312,7 +312,7 @@ void draw_current_board()
                 tile_offset = bombs_near;
             }
 
-            reveal_tile(i, j, (int8_t)tile_offset);
+            reveal_tile(x_modifier, y_modifier, (int8_t)tile_offset);
         }
     }
 }
@@ -401,18 +401,18 @@ uint8_t flags_near_tile(uint8_t tile_x, uint8_t tile_y)
     // Track number of flags.
     uint8_t num_flags = 0;
     // Loop over neighbores.
-    for (int16_t i = -1; i < 2; i++)
+    for (int16_t x_modifier = -1; x_modifier < 2; x_modifier++)
     {
-        for (int16_t j = -1; j < 2; j++)
+        for (int16_t y_modifier = -1; y_modifier < 2; y_modifier++)
         {
             // Check if neighbour is flag.
-            if (!coords_in_board(tile_x + i, tile_y + j) || (i == 0 && j == 0))
+            if (!coords_in_board(tile_x + x_modifier, tile_y + y_modifier) || (x_modifier == 0 && y_modifier == 0))
             {
                 continue;
             }
 
             // Track flags near.
-            num_flags += board_tiles[flatten_coords(i + tile_x, j + tile_y, board_size)].is_flagged;
+            num_flags += board_tiles[flatten_coords(x_modifier + tile_x, y_modifier + tile_y, board_size)].is_flagged;
         }
     }
 
@@ -423,24 +423,24 @@ uint8_t flags_near_tile(uint8_t tile_x, uint8_t tile_y)
 void reveal_nearby(uint8_t x, uint8_t y)
 {
     // Loop over neighbores.
-    for (int16_t i = -1; i < 2; i++)
+    for (int16_t x_modifier = -1; x_modifier < 2; x_modifier++)
     {
-        for (int16_t j = -1; j < 2; j++)
+        for (int16_t y_modifier = -1; y_modifier < 2; y_modifier++)
         {
             // If tile is not in board or is iteslf continue to next one.
-            if (!coords_in_board(x + i, y + j) ||  (i == 0 && j == 0))
+            if (!coords_in_board(x + x_modifier, y + y_modifier) ||  (x_modifier == 0 && y_modifier == 0))
             {
                 continue;
             }
 
-            board_tile_t* board_tile = &board_tiles[flatten_coords(i + x, j + y, board_size)];
+            board_tile_t* board_tile = &board_tiles[flatten_coords(x_modifier + x, y_modifier + y, board_size)];
             if (board_tile->is_flagged || board_tile->is_revealed)
             {
                 continue;
             }
 
             // Reveal tile by simulating clicking on it.
-            click_tile(x + i, y + j);
+            click_tile(x + x_modifier, y + y_modifier);
         }
     }
 }
@@ -493,13 +493,13 @@ void set_board_size(uint8_t new_size, uint8_t num_bombs)
     // Reset time
     previous_time_since = 0;
     time_overflow_tracker = 0;
-    last_calc_time = 0;
+    game_time = 0;
 
     // Reset board data.
     board_size = new_size;
     bombs_num = num_bombs;
     flags_num = num_bombs;
-    correct_flags_left = num_bombs;
+    unflagged_bombs = num_bombs;
 
     // Reset buttons.
     a_clicked = 0;
@@ -534,17 +534,17 @@ void set_board_size(uint8_t new_size, uint8_t num_bombs)
         board_tiles = NULL;
     }
 
-    board_tiles = (board_tile_t*)malloc(board_size * board_size);
+    board_tiles = (board_tile_t*)malloc(board_size * board_size * sizeof(board_tile_t));
     if (board_tiles == NULL)
     {
         crash(1);
     }
 
-    for (uint16_t i = 0; i < (uint16_t)(board_size * board_size); i++)
+    for (uint16_t tile_index = 0; tile_index < ((uint16_t)board_size * board_size); tile_index++)
     {
-        board_tiles[i].is_bomb = 0;
-        board_tiles[i].is_revealed = 0;
-        board_tiles[i].is_flagged = 0;
+        board_tiles[tile_index].is_bomb = 0;
+        board_tiles[tile_index].is_revealed = 0;
+        board_tiles[tile_index].is_flagged = 0;
     }
 
     // Bombs were not initialized and will be at next click.
@@ -570,7 +570,7 @@ void first_tile()
     uint8_t player_y = cursor_board_y();
 
     // This method requires an array to save the locations in. This wastes quite a lot of memory but is much more efficient.
-    uint16_t* bomb_locations = (uint16_t*)malloc(bombs_num);
+    uint16_t* bomb_locations = (uint16_t*)malloc(bombs_num * sizeof(uint16_t));
     if (bomb_locations == NULL)
     {
         crash(1);
@@ -579,38 +579,38 @@ void first_tile()
     uint16_t protected_modifier = 0;
 
     // Setting the starting values to the location array.
-    for (uint32_t i = 0; i < bombs_num; i++)
+    for (uint32_t tile_index = 0; tile_index < bombs_num; tile_index++)
     {
         // Checking if the tile is protected. If it is this tile will be skipped (with the incrementation of protected_modifier) and so on.
-        while (abs((int16_t)player_x - (i + protected_modifier) % board_size) <= 1 && abs((int16_t)player_y - (i + protected_modifier) / board_size) <= 1)
+        while (abs((int16_t)player_x - (tile_index + protected_modifier) % board_size) <= 1 && abs((int16_t)player_y - (tile_index + protected_modifier) / board_size) <= 1)
         {
             protected_modifier++;
         }
 
-        bomb_locations[i] = i + protected_modifier;
+        bomb_locations[tile_index] = tile_index + protected_modifier;
     }
 
     // Iterating over every other available number.
-    for (uint32_t i = bombs_num; i + protected_modifier < board_size * board_size; i++)
+    for (uint32_t tile_index = bombs_num; tile_index + protected_modifier < board_size * board_size; tile_index++)
     {
         // Checking if its protected.
-        while (abs((int16_t)player_x - (i + protected_modifier) % board_size) <= 1 && abs((int16_t)player_y - (i + protected_modifier) / board_size) <= 1)
+        while (abs((int16_t)player_x - (tile_index + protected_modifier) % board_size) <= 1 && abs((int16_t)player_y - (tile_index + protected_modifier) / board_size) <= 1)
         {
             protected_modifier++;
         }
 
         // Replacing it with a previously in number.
-        uint32_t j = rand() % i;
-        if (j < bombs_num)
+        uint32_t generated_index = rand() % tile_index;
+        if (generated_index < bombs_num)
         {
-            bomb_locations[j] = i + protected_modifier;
+            bomb_locations[generated_index] = tile_index + protected_modifier;
         }
     }
 
     // Iterating over the chosen numbers in order to insert them to the board matrix.
-    for (int32_t i = 0; i < bombs_num; i++)
+    for (int32_t bomb_index = 0; bomb_index < bombs_num; bomb_index++)
     {
-        board_tiles[bomb_locations[i]].is_bomb = 1;
+        board_tiles[bomb_locations[bomb_index]].is_bomb = 1;
     }
 
     free(bomb_locations);
@@ -648,7 +648,7 @@ void flag_tile(uint8_t x, uint8_t y)
         flags_num++;
         if (is_bomb)
         {
-            correct_flags_left++;
+            unflagged_bombs++;
         }
     }
     else
@@ -662,14 +662,14 @@ void flag_tile(uint8_t x, uint8_t y)
         tile_p->is_flagged = true;
 
         // Re-draw tile.
-        reveal_tile(x - scroll_state[0], y - scroll_state[1], 11);
+        reveal_tile(x - scroll_state[0], y - scroll_state[1], FLAG_OFFSET);
         flags_num--;
         if (is_bomb)
         {
-            correct_flags_left--;
+            unflagged_bombs--;
         }
 
-        if (correct_flags_left == 0)
+        if (unflagged_bombs == 0)
         {
             game_over(true);
         }
@@ -707,15 +707,15 @@ void update_ui()
             // Cast to uint32_t to enable values larger than the internal gameboy overflow. Multiply the
             // overflow tracker to get actual overflowed time in seconds and add current time in seconds to it.
             // If time is too large to present in the board, cap it.
-            last_calc_time = ((uint32_t)time_overflow_tracker * USHRT_MAX + time_since) / CLOCKS_PER_SEC;
-            if (last_calc_time > MAX_TIME)
+            game_time = ((uint32_t)time_overflow_tracker * USHRT_MAX + time_since) / CLOCKS_PER_SEC;
+            if (game_time > MAX_TIME)
             {
-                last_calc_time = MAX_TIME;
+                game_time = MAX_TIME;
             }
         }
 
         // Draw string.
-        number_to_chars(time_passed, 0, 5, last_calc_time);
+        number_to_chars(time_passed, 0, 5, game_time);
         set_bkg_tiles(13, 7, 5, 1, time_passed);
     }
 
@@ -850,11 +850,7 @@ void select()
 void anim_sprite(uint8_t state)
 {
     // Change offset based of state.
-    uint8_t offset = 0;
-    if (state == 1)
-    {
-        offset = 4;
-    }
+    uint8_t offset = BOARD_TILE_SCREEN_TILE_AREA * state;
 
     // Change sprites by offset.
     set_sprite_tile(0, offset);
@@ -995,9 +991,9 @@ void init()
     set_sprite_data(NUM_CURSOR_SPRITES, 1, mode_selector_data);
 
     // Setting cursor sprites to sprite memory.
-    for (uint8_t i = 0; i <= NUM_CURSOR_SPRITES; i++)
+    for (uint8_t sprite_index = 0; sprite_index <= NUM_CURSOR_SPRITES; sprite_index++)
     {
-        set_sprite_tile(i, i);
+        set_sprite_tile(sprite_index, sprite_index);
     }
 
     set_sprite_prop(8, S_PRIORITY);
@@ -1042,15 +1038,13 @@ void main()
     // Game loop.
     while(true)
     {
+        // Handle game logic.
         set_sprite_anim();
-
         handle_input();
 
-        // Update gameboy switches.
-
+        // Wait for frame to render to screen, iirc.
         wait_vbl_done();
 
-        // Update UI.
         update_ui();
     }
 }
