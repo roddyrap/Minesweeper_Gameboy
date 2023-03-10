@@ -201,7 +201,7 @@ uint16_t flatten_coords(uint8_t x, uint8_t y, uint8_t row_size)
 // checks if given cooridnates are in the board.
 bool coords_in_board(int8_t x, int8_t y)
 {
-    return 	!(x < 0 || y < 0 || x >= (uint16_t) board_size || y >= (uint16_t) board_size);
+    return !(x < 0 || y < 0 || x >= (uint16_t) board_size || y >= (uint16_t) board_size);
 }
 
 
@@ -504,8 +504,11 @@ void set_board_size(uint8_t new_size, uint8_t num_bombs)
     // Reset buttons.
     a_clicked = 0;
     b_clicked = 0;
+
+    // Reset game status.
     is_moving = false;
     board_manipulation_enabled = true;
+    counting_time = false;
 
     // Close select menu.
     select_menu_open = 0;
