@@ -22,13 +22,17 @@
 
 /**
  * Known bugs and issues:
- * - None for now!
+ * - If a tile is revealed when the number of flags near it matches the number on it,
+ *   it will also be immediately clicked.
  * Roadmap:
  * - Redesign bomb.
  * - Redesign cursor animation and add more frames.
  * - Visualize screen scrolling better.
  * - Bugfixes & stability improvements.
  * - More code refactoring.
+ * - Maybe add save?
+ * - Improve protected tiles implementation is bombs creation.
+ * - Move UI to window layer and use background scrolling functionality.
  */
 
 // Declaring function as it and click_tile call eachother.
@@ -85,7 +89,7 @@ const uint8_t BOMB_INDICATOR = 10;
 const int8_t FLAG_OFFSET     = 11;
 
 // Time constants. Max determined by number of characters.
-const uint32_t MAX_TIME = 99999;
+const uint32_t MAX_TIME = 999999;
 
 
 // Difficulty names.
@@ -97,7 +101,7 @@ const char D32_NAME[] = "NiMare";
 // Globals.
 
 // UI tile values.
-uint8_t time_passed[5] = { 0 };
+uint8_t time_passed[6] = { 0 };
 uint8_t game_status[6] = { 0 };
 uint8_t flags_used[8]  = { 0 };
 uint8_t scroll_show[5] = { 0 };
@@ -109,10 +113,10 @@ bool select_menu_open           = false;
 bool is_first_click             = false;
 
 // Time management.
-uint8_t time_overflow_tracker = 0;
-time_t start_time             = 0;
-time_t previous_time_since    = 0;
-uint32_t game_time            = 0;
+uint16_t time_overflow_tracker = 0;
+time_t start_time              = 0;
+time_t previous_time_since     = 0;
+uint32_t game_time             = 0;
 
 // Button states.
 bool a_clicked      = false;
@@ -120,7 +124,7 @@ bool b_clicked      = false;
 bool select_clicked = false;
 
 // Handling continous movement.
-bool is_moving = false;
+bool is_moving             = false;
 time_t movement_start_time = 0;
 
 int8_t select_param;  // What board size is selected.
@@ -134,8 +138,8 @@ uint8_t scroll_state[2] = { 0 };
 board_tile_t *board_tiles = NULL;
 
 // Game information
-uint16_t bombs_num          = 0;
-uint16_t flags_num          = 0;
+uint16_t bombs_num       = 0;
+uint16_t flags_num       = 0;
 uint16_t unflagged_bombs = 0;
 
 // Takes a string (str) and writes it's ascii value as tiles to another array (array), at the specified size (array_size).
@@ -162,6 +166,7 @@ void number_to_chars(uint8_t *array, uint8_t arr_start, uint8_t arr_end, uint32_
     }
 }
 
+// Stop the game and notify the user that an error occured.
 void crash(int8_t exit_code)
 {
     // Modify game status.
@@ -171,9 +176,9 @@ void crash(int8_t exit_code)
     write_str_to_tile_array(time_passed, sizeof(time_passed), "Error");
     set_bkg_tiles(13, 5, sizeof(time_passed), 1, time_passed);
 
-    // Write creash code.
+    // Write crash code.
     number_to_chars(time_passed, 0, sizeof(time_passed), exit_code);
-    set_bkg_tiles(13, 7, 5, 1, time_passed);
+    set_bkg_tiles(13, 7, sizeof(time_passed), 1, time_passed);
 
     exit(exit_code);
 }
@@ -380,16 +385,13 @@ void move_cursor(int8_t x, int8_t y)
         scroll_y = y;
     }
 
-    if (scroll_x == 0 && scroll_y == 0)
-    {
-        cursor[0] += x;
-        cursor[1] += y;
-        // Draw player grid.
-        move_sprite_grid(cursor[0], cursor[1]);
-        // Return if moved.
-        return;
-    }
-    else
+    cursor[0] += scroll_x == 0 ? x : 0;
+    cursor[1] += scroll_y == 0 ? y : 0;
+
+    // Draw player grid.
+    move_sprite_grid(cursor[0], cursor[1]);
+
+    if (scroll_x != 0 || scroll_y != 0)
     {
         scroll_board(scroll_x, scroll_y);
     }
@@ -514,9 +516,9 @@ void set_board_size(uint8_t new_size, uint8_t num_bombs)
     select_menu_open = 0;
 
     // Initialize changing ui.
-    write_str_to_tile_array(time_passed, sizeof(time_passed), "00000"   );
+    write_str_to_tile_array(time_passed, sizeof(time_passed), "000000"  );
     write_str_to_tile_array(flags_used , sizeof(flags_used) , "000//000");
-    write_str_to_tile_array(scroll_show, sizeof(scroll_show), "00/00"   );
+    write_str_to_tile_array(scroll_show, sizeof(scroll_show), "00|00 "   );
 
     // Initialize cursor.
     cursor[0] = 0;
@@ -707,10 +709,19 @@ void update_ui()
             // Log the current time passed for the future.
             previous_time_since = time_since;
 
-            // Cast to uint32_t to enable values larger than the internal gameboy overflow. Multiply the
-            // overflow tracker to get actual overflowed time in seconds and add current time in seconds to it.
-            // If time is too large to present in the board, cap it.
-            game_time = ((uint32_t)time_overflow_tracker * USHRT_MAX + time_since) / CLOCKS_PER_SEC;
+            // Don't want overflow to occur in (uint32_t)uint16 * uint16 + uint16.
+            if (time_overflow_tracker < USHRT_MAX)
+            {
+                // Cast to uint32_t to enable values larger than the internal gameboy overflow. Multiply the
+                // overflow tracker to get actual overflowed time in seconds and add current time in seconds to it.
+                // If time is too large to present in the board, cap it.
+                game_time = ((uint32_t)time_overflow_tracker * USHRT_MAX + time_since) / CLOCKS_PER_SEC;
+            }
+            else
+            {
+                game_time = MAX_TIME;
+            }
+
             if (game_time > MAX_TIME)
             {
                 game_time = MAX_TIME;
@@ -718,17 +729,16 @@ void update_ui()
         }
 
         // Draw string.
-        number_to_chars(time_passed, 0, 5, game_time);
-        set_bkg_tiles(13, 7, 5, 1, time_passed);
+        number_to_chars(time_passed, 0, sizeof(time_passed), game_time);
+        set_bkg_tiles(13, 7, sizeof(time_passed), 1, time_passed);
     }
 
     // Update flags left.
     number_to_chars(flags_used, 0, 3, flags_num);
     set_bkg_tiles(13, 11, 4, 2, flags_used);
+
     // Update scroll status.
-    // X.
     number_to_chars(scroll_show, 0, 2, scroll_state[0]);
-    // Y.
     number_to_chars(scroll_show, 3, 5, scroll_state[1]);
     set_bkg_tiles(13, 16, 5, 1, scroll_show);
 }
@@ -929,16 +939,14 @@ void handle_input()
     // Click A.
     if (joypad_status & J_A)
     {
-        if (!a_clicked)
+        if (!a_clicked && board_manipulation_enabled && !select_menu_open)
         {
             if (is_first_click)
             {
                 first_tile();
             }
-            else if (board_manipulation_enabled)
-            {
-                click_tile(cursor_board_x(), cursor_board_y());
-            }
+
+            click_tile(cursor_board_x(), cursor_board_y());
 
             a_clicked = true;
         }
@@ -952,15 +960,13 @@ void handle_input()
     if (joypad_status & J_B)
     {
         // If wasn't clicked.
-        if (!b_clicked && board_manipulation_enabled)
+        if (!b_clicked && board_manipulation_enabled && !select_menu_open)
         {
             b_clicked = true;
 
             flag_tile(cursor_board_x(), cursor_board_y());
         }
     }
-
-    // If not clicked then not clicked.
     else
     {
         b_clicked = false;
@@ -1004,8 +1010,8 @@ void init()
     // Init UI Background.
     set_bkg_tiles(12, 0, 8, 18, ui_background_map);
 
-    // Write constant text to UI.
-    uint8_t ui_consts[6];
+    // Write constant text to UI (+1 for null terminator).
+    uint8_t ui_consts[7];
 
     write_str_to_tile_array(ui_consts, 6, "Status");
     set_bkg_tiles(13, 1, 6, 1, ui_consts);
@@ -1030,7 +1036,7 @@ void init()
 void set_sprite_anim()
 {
     time_t current_time = clock();
-    anim_sprite(current_time % 100 / 50);
+    anim_sprite((current_time / 50) % 2);
 }
 
 void main()
@@ -1043,11 +1049,11 @@ void main()
     {
         // Handle game logic.
         set_sprite_anim();
+
         handle_input();
+        update_ui();
 
         // Wait for frame to render to screen, iirc.
         wait_vbl_done();
-
-        update_ui();
     }
 }
