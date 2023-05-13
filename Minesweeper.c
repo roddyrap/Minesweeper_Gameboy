@@ -124,8 +124,7 @@ bool b_clicked      = false;
 bool select_clicked = false;
 
 // Handling continous movement.
-bool is_moving             = false;
-time_t movement_start_time = 0;
+time_t movement_time = 0;
 
 int8_t select_param;  // What board size is selected.
 
@@ -143,16 +142,16 @@ uint16_t flags_num       = 0;
 uint16_t unflagged_bombs = 0;
 
 // Takes a string (str) and writes it's ascii value as tiles to another array (array), at the specified size (array_size).
-void write_str_to_tile_array(uint8_t* array, uint8_t array_size, const char* str)
+void write_str_to_tile_array(uint8_t* o_array, uint8_t array_size, const char* str)
 {
     for (uint8_t char_index = 0; char_index < array_size; char_index++)
     {
-        if (str[char_index] == 0)
+        if (str[char_index] == '\0')
         {
             break;
         }
 
-        array[char_index] = str[char_index] - ' ' + FONT_START;
+        o_array[char_index] = str[char_index] - ' ' + FONT_START;
     }
 }
 
@@ -327,14 +326,14 @@ void draw_current_board()
 void scroll_board(int8_t x, int8_t y)
 {
     // Tracking if screen was scrolled (logically) to know if to draw board.
-    bool has_scrolled = 0;
+    bool has_scrolled = false;
     // Check conditions for horizontal scroll.
     if ((scroll_state[0] < board_size - NUM_COLS && x > 0) || (scroll_state[0] > 0 && x < 0))
     {
         // Track scroll.
         scroll_state[0] += x;
         // Draw when should.
-        has_scrolled = 1;
+        has_scrolled = true;
     }
 
     // Check conditions for vertical scroll.
@@ -343,11 +342,11 @@ void scroll_board(int8_t x, int8_t y)
         // Track scroll.
         scroll_state[1] += y;
         // Draw when should.
-        has_scrolled = 1;
+        has_scrolled = true;
     }
 
     // If didn't scroll return.
-    if (has_scrolled == 0)
+    if (!has_scrolled)
     {
         return;
     }
@@ -504,21 +503,20 @@ void set_board_size(uint8_t new_size, uint8_t num_bombs)
     unflagged_bombs = num_bombs;
 
     // Reset buttons.
-    a_clicked = 0;
-    b_clicked = 0;
+    a_clicked = false;
+    b_clicked = false;
 
     // Reset game status.
-    is_moving = false;
     board_manipulation_enabled = true;
     counting_time = false;
 
     // Close select menu.
-    select_menu_open = 0;
+    select_menu_open = false;
 
     // Initialize changing ui.
     write_str_to_tile_array(time_passed, sizeof(time_passed), "000000"  );
-    write_str_to_tile_array(flags_used , sizeof(flags_used) , "000//000");
-    write_str_to_tile_array(scroll_show, sizeof(scroll_show), "00|00 "   );
+    write_str_to_tile_array(flags_used , sizeof(flags_used) , "000/000 ");
+    write_str_to_tile_array(scroll_show, sizeof(scroll_show), "00|00 "  );
 
     // Initialize cursor.
     cursor[0] = 0;
@@ -530,7 +528,7 @@ void set_board_size(uint8_t new_size, uint8_t num_bombs)
     scroll_state[1] = 0;
 
     // updating flag string.
-    number_to_chars(flags_used, 5, 8, flags_num);
+    number_to_chars(flags_used, 4, 7, flags_num);
 
     // Reset board data to zero.
     if (board_tiles != NULL)
@@ -547,9 +545,9 @@ void set_board_size(uint8_t new_size, uint8_t num_bombs)
 
     for (uint16_t tile_index = 0; tile_index < ((uint16_t)board_size * board_size); tile_index++)
     {
-        board_tiles[tile_index].is_bomb = 0;
-        board_tiles[tile_index].is_revealed = 0;
-        board_tiles[tile_index].is_flagged = 0;
+        board_tiles[tile_index].is_bomb = false;
+        board_tiles[tile_index].is_revealed = false;
+        board_tiles[tile_index].is_flagged = false;
     }
 
     // Bombs were not initialized and will be at next click.
@@ -560,7 +558,7 @@ void set_board_size(uint8_t new_size, uint8_t num_bombs)
 }
 
 // First player click, initializing bombs.
-void first_tile()
+void initialize_bombs()
 {
     // Action is long and stops progress, fast processing is worth it.
     if (_cpu == CGB_TYPE)
@@ -615,7 +613,7 @@ void first_tile()
     // Iterating over the chosen numbers in order to insert them to the board matrix.
     for (int32_t bomb_index = 0; bomb_index < bombs_num; bomb_index++)
     {
-        board_tiles[bomb_locations[bomb_index]].is_bomb = 1;
+        board_tiles[bomb_locations[bomb_index]].is_bomb = true;
     }
 
     free(bomb_locations);
@@ -630,9 +628,6 @@ void first_tile()
     // Start time measurement.
     start_time = clock();
     counting_time = true;
-
-    // Click tile.
-    click_tile(player_x, player_y);
 }
 
 // Tile flag status is changed due to a click.
@@ -703,7 +698,7 @@ void update_ui()
             if (time_since < previous_time_since)
             {
                 // Logging the overflow.
-                time_overflow_tracker += 1;
+                time_overflow_tracker++;
             }
 
             // Log the current time passed for the future.
@@ -793,9 +788,9 @@ void set_difficulty(uint8_t new_diff)
 
 void select()
 {
-    if (select_menu_open == 0)
+    if (!select_menu_open)
     {
-        select_menu_open = 1;
+        select_menu_open = true;
 
         // Disable palettes if GBC.
         if (_cpu == CGB_TYPE)
@@ -844,7 +839,7 @@ void select()
     }
     else
     {
-        select_menu_open = 0;
+        select_menu_open = false;
 
         // Hide select cursor.
         move_sprite(8, 0, 0);
@@ -893,33 +888,25 @@ void handle_input()
     uint8_t joypad_status = joypad();
 
     // Direction input handling.
+    time_t current_time = clock();
     int8_t x_movement = -!!(joypad_status & J_LEFT) + !!(joypad_status & J_RIGHT);
     int8_t y_movement = -!!(joypad_status & J_UP  ) + !!(joypad_status & J_DOWN );
-    if (!(x_movement || y_movement))
+    if ((x_movement || y_movement) && ((current_time - movement_time) / 13 > 0))
     {
-        is_moving = false;
-    }
-    else if (!is_moving)
-    {
-        is_moving = true;
-        movement_start_time = clock();
-        handle_movement(x_movement, y_movement);
-    }
-    else if ((clock() - movement_start_time) % 3 == 0)
-    {
+        movement_time = current_time;
         handle_movement(x_movement, y_movement);
     }
 
     // If start is pressed.
     if (joypad_status & J_START)
     {
-            // Set difficulty, close the menu and restart.
-            if (select_menu_open)
-            {
-                select();
-            }
+        // Set difficulty, close the menu and restart.
+        if (select_menu_open)
+        {
+            select();
+        }
 
-            set_difficulty(select_param);
+        set_difficulty(select_param);
     }
 
     // If select is pressed.
@@ -943,7 +930,7 @@ void handle_input()
         {
             if (is_first_click)
             {
-                first_tile();
+                initialize_bombs();
             }
 
             click_tile(cursor_board_x(), cursor_board_y());
