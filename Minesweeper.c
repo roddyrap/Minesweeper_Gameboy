@@ -25,13 +25,12 @@
  * - If a tile is revealed when the number of flags near it matches the number on it,
  *   it will also be immediately clicked.
  * Roadmap:
- * - Redesign bomb.
  * - Redesign cursor animation and add more frames.
  * - Visualize screen scrolling better.
  * - Bugfixes & stability improvements.
  * - More code refactoring.
  * - Maybe add save?
- * - Improve protected tiles implementation is bombs creation.
+ * - Improve protected tiles implementation in bombs creation.
  * - Move UI to window layer and use background scrolling functionality.
  */
 
@@ -45,7 +44,22 @@ typedef struct {
     bool is_flagged  : 1;
 } board_tile_t;
 
-// constants.
+// Represents all uniquely drawn tiles.
+typedef enum {
+    TILE_TYPE_HIDDEN,
+    TILE_TYPE_ONE,
+    TILE_TYPE_TWO,
+    TILE_TYPE_THREE,
+    TILE_TYPE_FOUR,
+    TILE_TYPE_FIVE,
+    TILE_TYPE_SIX,
+    TILE_TYPE_SEVEN,
+    TILE_TYPE_EIGHT,
+    TILE_TYPE_BOMB,
+    TILE_TYPE_FLAG,
+    TILE_TYPE_EMPTY,
+} tile_type_t;
+
 // CGB Palettes.
 const uint16_t MINE_TILES_CGB_PALETTE[] = {
     RGB_WHITE, RGB_DARKGRAY, RGB_LIGHTGRAY, RGB_BLACK, // Default palette.
@@ -64,8 +78,8 @@ const uint16_t SPRITE_PALETTE[] = {
 };
 
 // Memory placements.
-const uint8_t FONT_START          = 0x32;
-const uint8_t UI_BACKGROUND_START = 0x92;
+const uint8_t FONT_START          = 44;
+const uint8_t UI_BACKGROUND_START = 140;
 
 // Sprite data.
 const uint8_t NUM_CURSOR_SPRITES = 8;
@@ -83,10 +97,6 @@ const uint8_t BOARD_TILE_PIXELS_LENGTH       = 16;
 const uint8_t BOARD_TILE_SCREEN_TILES_LENGTH = 2;
 const uint8_t BOARD_TILE_SCREEN_TILE_AREA    = 4;
 const uint8_t SCREEN_TILE_PIXELS_LENGTH      = 8;
-
-// Unique tilemap offsets.
-const uint8_t BOMB_INDICATOR = 10;
-const int8_t FLAG_OFFSET     = 11;
 
 // Time constants. Max determined by number of characters.
 const uint32_t MAX_TIME = 999999;
@@ -110,7 +120,7 @@ uint8_t scroll_show[5] = { 0 };
 bool board_manipulation_enabled = true;
 bool counting_time              = false;
 bool select_menu_open           = false;
-bool is_first_click             = false;
+bool initialized_bombs          = false;
 
 // Time management.
 uint16_t time_overflow_tracker = 0;
@@ -126,7 +136,8 @@ bool select_clicked = false;
 // Handling continous movement.
 time_t movement_time = 0;
 
-int8_t select_param;  // What board size is selected.
+// What board size is selected.
+int8_t select_param;
 
 // Game board information (x, y).
 uint8_t board_size      = 0;
@@ -162,6 +173,19 @@ void number_to_chars(uint8_t *array, uint8_t arr_start, uint8_t arr_end, uint32_
     {
         array[arr_end - neg_index] = num % 10 + FONT_START + '0' - ' ';
         num = num / 10;
+    }
+}
+
+// Assumes that the numbers are in order.
+tile_type_t bombs_nearby_to_tile_type(int bombs_nearby)
+{
+    if (bombs_nearby == 0)
+    {
+        return TILE_TYPE_EMPTY;
+    }
+    else
+    {
+        return TILE_TYPE_ONE - 1 + bombs_nearby;
     }
 }
 
@@ -227,7 +251,7 @@ uint8_t bombs_near_tile(uint8_t tile_x, uint8_t tile_y)
     // If the tile is a bomb return BOMB_INDICATOR.
     if (board_tiles[flatten_coords(tile_x, tile_y, board_size)].is_bomb)
     {
-        return BOMB_INDICATOR;
+        return TILE_TYPE_BOMB;
     }
 
     // Loop over nearby tiles and find bombs.
@@ -248,8 +272,8 @@ uint8_t bombs_near_tile(uint8_t tile_x, uint8_t tile_y)
     return num_bombs;
 }
 
-// Draws a board tile (tile_num) to a specified location (x, y).
-void reveal_tile(uint8_t x, uint8_t y, int8_t tile_num)
+// Draws a board tile (tile_type) to a specified location (x, y).
+void draw_tile(uint8_t x, uint8_t y, tile_type_t tile_type)
 {
     // Check if coordinates are in the graphical part of the screen.
     if (x >= NUM_COLS || y >= NUM_ROWS)
@@ -260,15 +284,17 @@ void reveal_tile(uint8_t x, uint8_t y, int8_t tile_num)
     // CGB specific palette swap to color tiles.
     if (_cpu == CGB_TYPE)
     {
-        uint8_t palette_ind = tile_num;
-        if (tile_num == 0 || tile_num == -1 || tile_num == 8)
-        {
-            palette_ind = 0;
-        }
+        uint8_t palette_ind = tile_type;
 
-        else if (tile_num == FLAG_OFFSET || tile_num == (int16_t)BOMB_INDICATOR)
+        // Eight's color is light grey.
+        if (tile_type == TILE_TYPE_EIGHT || tile_type == TILE_TYPE_EMPTY)
         {
-            palette_ind = 3;
+            palette_ind = TILE_TYPE_HIDDEN;
+        }
+        // Three is red, and bombs and flags are meant to catch attention.
+        else if (tile_type == TILE_TYPE_FLAG || tile_type == TILE_TYPE_BOMB)
+        {
+            palette_ind = TILE_TYPE_THREE;
         }
 
         // Write meta_data (tile palette is bits 0-2).
@@ -284,8 +310,9 @@ void reveal_tile(uint8_t x, uint8_t y, int8_t tile_num)
         VBK_REG = 0;
     }
 
-    // Draw background with given tile, offset is BOARD_TILE_SCREEN_TILE_AREA * tile_num and starts from BOARD_TILE_SCREEN_TILE_AREA.
-    set_bkg_tiles(2 * x, 2 * y, 2, 2, mine_tile_sheet_map + BOARD_TILE_SCREEN_TILE_AREA + BOARD_TILE_SCREEN_TILE_AREA * tile_num);
+    // Draw background with given tile, offset is BOARD_TILE_SCREEN_TILE_AREA * tile_type and starts from 0.
+    set_bkg_tiles(2 * x, 2 * y, BOARD_TILE_SCREEN_TILES_LENGTH, BOARD_TILE_SCREEN_TILES_LENGTH,
+                  mine_tile_sheet_map + BOARD_TILE_SCREEN_TILE_AREA * tile_type);
 }
 
 // Draws the whole board, factoring in the screen scroll.
@@ -300,23 +327,21 @@ void draw_current_board()
         {
             // The y position of the drawn tile with scroll.
             uint8_t new_y = y_modifier + scroll_state[1];
+
             // vram offset.
-            int8_t tile_offset = -1;
+            tile_type_t tile_type = TILE_TYPE_HIDDEN;
             if (board_tiles[flatten_coords(new_x, new_y, board_size)].is_flagged)
             {
                 // set offset to flag tile.
-                tile_offset = FLAG_OFFSET;
+                tile_type = TILE_TYPE_FLAG;
             }
-
             else if (board_tiles[flatten_coords(new_x, new_y, board_size)].is_revealed)
             {
-                // find bombs near.
-                uint8_t bombs_near = bombs_near_tile(new_x, new_y);
                 // set to offset to bombs near.
-                tile_offset = bombs_near;
+                tile_type = bombs_nearby_to_tile_type(bombs_near_tile(new_x, new_y));
             }
 
-            reveal_tile(x_modifier, y_modifier, (int8_t)tile_offset);
+            draw_tile(x_modifier, y_modifier, (tile_type_t)tile_type);
         }
     }
 }
@@ -460,7 +485,7 @@ void click_tile(uint8_t x, uint8_t y)
     uint8_t bombs_near = bombs_near_tile(x, y);
 
     // If the tile is a bomb.
-    if (bombs_near == BOMB_INDICATOR)
+    if (bombs_near == TILE_TYPE_BOMB)
     {
         game_over(false);
     }
@@ -485,7 +510,7 @@ void click_tile(uint8_t x, uint8_t y)
     }
 
     // Re-draw clicked tile to show revealed status.
-    reveal_tile(x - scroll_state[0], y - scroll_state[1], bombs_near);
+    draw_tile(x - scroll_state[0], y - scroll_state[1], bombs_nearby_to_tile_type(bombs_near));
 }
 
 // Change board size and number of bombs, functions as a reset.
@@ -537,21 +562,16 @@ void set_board_size(uint8_t new_size, uint8_t num_bombs)
         board_tiles = NULL;
     }
 
-    board_tiles = (board_tile_t*)malloc(board_size * board_size * sizeof(board_tile_t));
+    // Because we use calloc, we know that the boolean flags aren't toggled, and can
+    // skip initializing them.
+    board_tiles = (board_tile_t*)calloc(board_size * board_size, sizeof(board_tile_t));
     if (board_tiles == NULL)
     {
         crash(1);
     }
 
-    for (uint16_t tile_index = 0; tile_index < ((uint16_t)board_size * board_size); tile_index++)
-    {
-        board_tiles[tile_index].is_bomb = false;
-        board_tiles[tile_index].is_revealed = false;
-        board_tiles[tile_index].is_flagged = false;
-    }
-
     // Bombs were not initialized and will be at next click.
-    is_first_click = true;
+    initialized_bombs = false;
 
     // Re-draw board.
     draw_current_board();
@@ -566,7 +586,7 @@ void initialize_bombs()
         cpu_fast();
     }
 
-    is_first_click = false;
+    initialized_bombs = true;
 
     // Bomb generation script - Uses Reservoir sampling to create the random locations.
     uint8_t player_x = cursor_board_x();
@@ -634,7 +654,7 @@ void initialize_bombs()
 void flag_tile(uint8_t x, uint8_t y)
 {
     board_tile_t *tile_p = &board_tiles[flatten_coords(x, y, board_size)];
-    if (is_first_click || tile_p->is_revealed)
+    if (!initialized_bombs || tile_p->is_revealed)
     {
         return;
     }
@@ -644,7 +664,7 @@ void flag_tile(uint8_t x, uint8_t y)
     if (tile_p->is_flagged)
     {
         tile_p->is_flagged = false;
-        reveal_tile(x - scroll_state[0], y - scroll_state[1], -1);
+        draw_tile(x - scroll_state[0], y - scroll_state[1], TILE_TYPE_EMPTY);
         flags_num++;
         if (is_bomb)
         {
@@ -662,7 +682,7 @@ void flag_tile(uint8_t x, uint8_t y)
         tile_p->is_flagged = true;
 
         // Re-draw tile.
-        reveal_tile(x - scroll_state[0], y - scroll_state[1], FLAG_OFFSET);
+        draw_tile(x - scroll_state[0], y - scroll_state[1], TILE_TYPE_FLAG);
         flags_num--;
         if (is_bomb)
         {
@@ -928,7 +948,7 @@ void handle_input()
     {
         if (!a_clicked && board_manipulation_enabled && !select_menu_open)
         {
-            if (is_first_click)
+            if (!initialized_bombs)
             {
                 initialize_bombs();
             }
@@ -978,9 +998,9 @@ void init()
     }
 
     // Init map.
-    set_bkg_data(0  , 49, mine_tile_sheet_data); // Load Minetiles to memory.
-    set_bkg_data(50 , 96, ChicagoFont_data    ); // Load ChicagoFont to memory, 96 tiles.
-    set_bkg_data(146, 9 , ui_background_data  ); // Load ui background to memory, 96 tiles.
+    set_bkg_data(0  , 44, mine_tile_sheet_data); // Load Minetiles to memory.
+    set_bkg_data(44 , 96, ChicagoFont_data    ); // Load ChicagoFont to memory, 96 tiles.
+    set_bkg_data(140, 9 , ui_background_data  ); // Load ui background to memory, 9 tiles.
 
     // Initialize cursor sprite.
     set_sprite_data(0, NUM_CURSOR_SPRITES, sprites_data);
