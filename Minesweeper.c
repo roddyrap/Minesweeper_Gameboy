@@ -664,7 +664,7 @@ void flag_tile(uint8_t x, uint8_t y)
     if (tile_p->is_flagged)
     {
         tile_p->is_flagged = false;
-        draw_tile(x - scroll_state[0], y - scroll_state[1], TILE_TYPE_EMPTY);
+        draw_tile(x - scroll_state[0], y - scroll_state[1], TILE_TYPE_HIDDEN);
         flags_num++;
         if (is_bomb)
         {
