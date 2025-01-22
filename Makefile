@@ -6,7 +6,7 @@ OUT_NAME=Minesweeper.gb
 
 default:
 	@mkdir -p $(OUT_FOLDER)
-	@$(CC) -Wa-l -Wl-m -Wl-j -Wm-yc -DUSE_SFR_FOR_REG Minesweeper.c -o $(OUT_FOLDER)/$(OUT_NAME)
+	@$(CC) -Wa-l -Wl-m -Wl-j -Wm-yc -DUSE_SFR_FOR_REG -I. -Isrc/ src/Minesweeper.c -o $(OUT_FOLDER)/$(OUT_NAME)
 
 clean:
 	@rm -rf $(OUT_FOLDER)
