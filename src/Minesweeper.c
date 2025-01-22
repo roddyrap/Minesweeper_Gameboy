@@ -20,10 +20,11 @@
 #include "Tiles/ui_background_map.c"
 #include "Tiles/mode_selector_data.c"
 
+#include "board.h"
+
 /**
  * Known bugs and issues:
- * - If a tile is revealed when the number of flags near it matches the number on it,
- *   it will also be immediately clicked.
+ * - None!
  * Roadmap:
  * - Redesign cursor animation and add more frames.
  * - Visualize screen scrolling better.
@@ -36,13 +37,6 @@
 
 // Declaring function as it and click_tile call eachother.
 void click_tile(uint8_t, uint8_t);
-
-// Information stored on each tile.
-typedef struct {
-    bool is_revealed : 1;
-    bool is_bomb     : 1;
-    bool is_flagged  : 1;
-} board_tile_t;
 
 // Represents all uniquely drawn tiles.
 typedef enum {
@@ -120,7 +114,6 @@ uint8_t scroll_show[5] = { 0 };
 bool board_manipulation_enabled = true;
 bool counting_time              = false;
 bool select_menu_open           = false;
-bool initialized_bombs          = false;
 
 // Time management.
 uint16_t time_overflow_tracker = 0;
@@ -140,17 +133,11 @@ time_t movement_time = 0;
 int8_t select_param;
 
 // Game board information (x, y).
-uint8_t board_size      = 0;
-uint8_t cursor[2]       = { 0 };
-uint8_t scroll_state[2] = { 0 };
+uint8_t cursor[2]       = { 0, 0 };
+uint8_t scroll_state[2] = { 0, 0 };
 
-// Information about tiles on the board, should have size of BoardNum^2.
-board_tile_t *board_tiles = NULL;
-
-// Game information
-uint16_t bombs_num       = 0;
-uint16_t flags_num       = 0;
-uint16_t unflagged_bombs = 0;
+// Board State.
+game_board_t *board = NULL;
 
 // Takes a string (str) and writes it's ascii value as tiles to another array (array), at the specified size (array_size).
 void write_str_to_tile_array(uint8_t* o_array, uint8_t array_size, const char* str)
@@ -177,7 +164,7 @@ void number_to_chars(uint8_t *array, uint8_t arr_start, uint8_t arr_end, uint32_
 }
 
 // Assumes that the numbers are in order.
-tile_type_t bombs_nearby_to_tile_type(int bombs_nearby)
+tile_type_t bombs_nearby_to_tile_type(uint8_t bombs_nearby)
 {
     if (bombs_nearby == 0)
     {
@@ -220,19 +207,6 @@ void game_over(bool is_win)
     counting_time = false;
 }
 
-// Takes 2D coordinates and flattens them to 1D.
-uint16_t flatten_coords(uint8_t x, uint8_t y, uint8_t row_size)
-{
-    return ((uint16_t)y) * row_size + x;
-}
-
-// checks if given cooridnates are in the board.
-bool coords_in_board(int8_t x, int8_t y)
-{
-    return !(x < 0 || y < 0 || x >= (uint16_t) board_size || y >= (uint16_t) board_size);
-}
-
-
 // Actual position on board (unlike cursor which is graphical position).
 uint8_t cursor_board_x()
 {
@@ -242,34 +216,6 @@ uint8_t cursor_board_x()
 uint8_t cursor_board_y()
 {
     return cursor[1] + scroll_state[1];
-}
-
-// Finds the amount of bombs near a tile (technically including itself).
-// BOMB_INDICATOR if tile is bomb.
-uint8_t bombs_near_tile(uint8_t tile_x, uint8_t tile_y)
-{
-    // If the tile is a bomb return BOMB_INDICATOR.
-    if (board_tiles[flatten_coords(tile_x, tile_y, board_size)].is_bomb)
-    {
-        return TILE_TYPE_BOMB;
-    }
-
-    // Loop over nearby tiles and find bombs.
-    uint8_t num_bombs = 0;
-    for (int16_t x_modifier = -1; x_modifier < 2; x_modifier++)
-    {
-        for (int16_t y_modifier = -1; y_modifier < 2; y_modifier++)
-        {
-            if (!coords_in_board(tile_x + x_modifier, tile_y + y_modifier))
-            {
-                continue;
-            }
-
-            num_bombs += board_tiles[flatten_coords(x_modifier + tile_x, y_modifier + tile_y, board_size)].is_bomb;
-        }
-    }
-
-    return num_bombs;
 }
 
 // Draws a board tile (tile_type) to a specified location (x, y).
@@ -330,15 +276,15 @@ void draw_current_board()
 
             // vram offset.
             tile_type_t tile_type = TILE_TYPE_HIDDEN;
-            if (board_tiles[flatten_coords(new_x, new_y, board_size)].is_flagged)
+            if (board_is_flag(board, new_x, new_y))
             {
                 // set offset to flag tile.
                 tile_type = TILE_TYPE_FLAG;
             }
-            else if (board_tiles[flatten_coords(new_x, new_y, board_size)].is_revealed)
+            else if (board_is_revealed(board, new_x, new_y))
             {
                 // set to offset to bombs near.
-                tile_type = bombs_nearby_to_tile_type(bombs_near_tile(new_x, new_y));
+                tile_type = bombs_nearby_to_tile_type(board_bombs_near_tile(board, new_x, new_y));
             }
 
             draw_tile(x_modifier, y_modifier, (tile_type_t)tile_type);
@@ -353,7 +299,7 @@ void scroll_board(int8_t x, int8_t y)
     // Tracking if screen was scrolled (logically) to know if to draw board.
     bool has_scrolled = false;
     // Check conditions for horizontal scroll.
-    if ((scroll_state[0] < board_size - NUM_COLS && x > 0) || (scroll_state[0] > 0 && x < 0))
+    if ((scroll_state[0] < board->board_size - NUM_COLS && x > 0) || (scroll_state[0] > 0 && x < 0))
     {
         // Track scroll.
         scroll_state[0] += x;
@@ -362,7 +308,7 @@ void scroll_board(int8_t x, int8_t y)
     }
 
     // Check conditions for vertical scroll.
-    if ((board_size - NUM_ROWS > scroll_state[1] && y > 0) || (scroll_state[1] > 0 && y < 0))
+    if ((board->board_size - NUM_ROWS > scroll_state[1] && y > 0) || (scroll_state[1] > 0 && y < 0))
     {
         // Track scroll.
         scroll_state[1] += y;
@@ -421,30 +367,6 @@ void move_cursor(int8_t x, int8_t y)
     }
 }
 
-// Finds the amount of flags near a tile (not including itself).
-uint8_t flags_near_tile(uint8_t tile_x, uint8_t tile_y)
-{
-    // Track number of flags.
-    uint8_t num_flags = 0;
-    // Loop over neighbores.
-    for (int16_t x_modifier = -1; x_modifier < 2; x_modifier++)
-    {
-        for (int16_t y_modifier = -1; y_modifier < 2; y_modifier++)
-        {
-            // Check if neighbour is flag.
-            if (!coords_in_board(tile_x + x_modifier, tile_y + y_modifier) || (x_modifier == 0 && y_modifier == 0))
-            {
-                continue;
-            }
-
-            // Track flags near.
-            num_flags += board_tiles[flatten_coords(x_modifier + tile_x, y_modifier + tile_y, board_size)].is_flagged;
-        }
-    }
-
-    return num_flags;
-}
-
 // Reveal nearby tiles.
 void reveal_nearby(uint8_t x, uint8_t y)
 {
@@ -454,12 +376,12 @@ void reveal_nearby(uint8_t x, uint8_t y)
         for (int16_t y_modifier = -1; y_modifier < 2; y_modifier++)
         {
             // If tile is not in board or is iteslf continue to next one.
-            if (!coords_in_board(x + x_modifier, y + y_modifier) ||  (x_modifier == 0 && y_modifier == 0))
+            if (!coords_in_board(board, x + x_modifier, y + y_modifier) ||  (x_modifier == 0 && y_modifier == 0))
             {
                 continue;
             }
 
-            board_tile_t* board_tile = &board_tiles[flatten_coords(x_modifier + x, y_modifier + y, board_size)];
+            board_tile_t* board_tile = board_get_tile(board, x_modifier + x, y_modifier + y);
             if (board_tile->is_flagged || board_tile->is_revealed)
             {
                 continue;
@@ -474,43 +396,43 @@ void reveal_nearby(uint8_t x, uint8_t y)
 // Click on tile, revealing it if possible.
 void click_tile(uint8_t x, uint8_t y)
 {
-    board_tile_t* board_tile = &board_tiles[flatten_coords(x, y, board_size)];
+    bool has_changed = board_click_tile(board, x, y);
 
-    // Revealing a flagged tile is not allowed.
-    if (board_tile->is_flagged)
+    // Reveal surrounding spaces if the number of surrounding flags matches the number of
+    // surrounding bombs. Only if the click doesn't reveal the tile.
+    if (!has_changed)
     {
-        return;
-    }
+        uint8_t bombs_near = board_bombs_near_tile(board, x, y);
 
-    uint8_t bombs_near = bombs_near_tile(x, y);
-
-    // If the tile is a bomb.
-    if (bombs_near == TILE_TYPE_BOMB)
-    {
-        game_over(false);
-    }
-
-    // If the tile was not previously revealed.
-    if (!board_tile->is_revealed)
-    {
-        // Set it to revealed.
-        board_tile->is_revealed = true;
-
-        // If no bombs are nearby autoreveal all nearby tiles.
-        if (bombs_near == 0)
+        if (board_flags_near_tile(board, x, y) == bombs_near && bombs_near != 0)
         {
             reveal_nearby(x, y);
         }
+
+        return;
     }
 
-    // Reveal surrounding spaces if the number of surrounding flags matches the number of surrounding bombs.
-    if (flags_near_tile(x, y) == bombs_near && bombs_near != 0)
+    board_mark_revealed(board, x, y);
+
+    uint8_t bombs_near = board_bombs_near_tile(board, x, y);
+
+    tile_type_t tile_to_draw = bombs_nearby_to_tile_type(bombs_near);
+
+    // If a bomb has been clicked a game-over state will be entered into.
+    bool is_victory = false;
+    if (board_is_game_over(board, &is_victory))
+    {
+        tile_to_draw = TILE_TYPE_BOMB;
+        game_over(is_victory);
+    }
+    // If no bombs are nearby autoreveal all nearby tiles.
+    else if (bombs_near == 0)
     {
         reveal_nearby(x, y);
     }
 
     // Re-draw clicked tile to show revealed status.
-    draw_tile(x - scroll_state[0], y - scroll_state[1], bombs_nearby_to_tile_type(bombs_near));
+    draw_tile(x - scroll_state[0], y - scroll_state[1], tile_to_draw);
 }
 
 // Change board size and number of bombs, functions as a reset.
@@ -522,10 +444,8 @@ void set_board_size(uint8_t new_size, uint8_t num_bombs)
     game_time = 0;
 
     // Reset board data.
-    board_size = new_size;
-    bombs_num = num_bombs;
-    flags_num = num_bombs;
-    unflagged_bombs = num_bombs;
+    board_free(board);
+    board = board_new(new_size, num_bombs);
 
     // Reset buttons.
     a_clicked = false;
@@ -553,25 +473,7 @@ void set_board_size(uint8_t new_size, uint8_t num_bombs)
     scroll_state[1] = 0;
 
     // updating flag string.
-    number_to_chars(flags_used, 4, 7, flags_num);
-
-    // Reset board data to zero.
-    if (board_tiles != NULL)
-    {
-        free(board_tiles);
-        board_tiles = NULL;
-    }
-
-    // Because we use calloc, we know that the boolean flags aren't toggled, and can
-    // skip initializing them.
-    board_tiles = (board_tile_t*)calloc(board_size * board_size, sizeof(board_tile_t));
-    if (board_tiles == NULL)
-    {
-        crash(1);
-    }
-
-    // Bombs were not initialized and will be at next click.
-    initialized_bombs = false;
+    number_to_chars(flags_used, 4, 7, board->flags_num);
 
     // Re-draw board.
     draw_current_board();
@@ -586,58 +488,10 @@ void initialize_bombs()
         cpu_fast();
     }
 
-    initialized_bombs = true;
-
-    // Bomb generation script - Uses Reservoir sampling to create the random locations.
-    uint8_t player_x = cursor_board_x();
-    uint8_t player_y = cursor_board_y();
-
-    // This method requires an array to save the locations in. This wastes quite a lot of memory but is much more efficient.
-    uint16_t* bomb_locations = (uint16_t*)malloc(bombs_num * sizeof(uint16_t));
-    if (bomb_locations == NULL)
+    if (!board_initialize_bombs(board, cursor_board_x(), cursor_board_y()))
     {
         crash(1);
     }
-
-    uint16_t protected_modifier = 0;
-
-    // Setting the starting values to the location array.
-    for (uint32_t tile_index = 0; tile_index < bombs_num; tile_index++)
-    {
-        // Checking if the tile is protected. If it is this tile will be skipped (with the incrementation of protected_modifier) and so on.
-        while (abs((int16_t)player_x - (tile_index + protected_modifier) % board_size) <= 1 && abs((int16_t)player_y - (tile_index + protected_modifier) / board_size) <= 1)
-        {
-            protected_modifier++;
-        }
-
-        bomb_locations[tile_index] = tile_index + protected_modifier;
-    }
-
-    // Iterating over every other available number.
-    for (uint32_t tile_index = bombs_num; tile_index + protected_modifier < board_size * board_size; tile_index++)
-    {
-        // Checking if its protected.
-        while (abs((int16_t)player_x - (tile_index + protected_modifier) % board_size) <= 1 && abs((int16_t)player_y - (tile_index + protected_modifier) / board_size) <= 1)
-        {
-            protected_modifier++;
-        }
-
-        // Replacing it with a previously in number.
-        uint32_t generated_index = rand() % tile_index;
-        if (generated_index < bombs_num)
-        {
-            bomb_locations[generated_index] = tile_index + protected_modifier;
-        }
-    }
-
-    // Iterating over the chosen numbers in order to insert them to the board matrix.
-    for (int32_t bomb_index = 0; bomb_index < bombs_num; bomb_index++)
-    {
-        board_tiles[bomb_locations[bomb_index]].is_bomb = true;
-    }
-
-    free(bomb_locations);
-    bomb_locations = NULL;
 
     // Stop fast processing.
     if (_cpu == CGB_TYPE)
@@ -653,46 +507,22 @@ void initialize_bombs()
 // Tile flag status is changed due to a click.
 void flag_tile(uint8_t x, uint8_t y)
 {
-    board_tile_t *tile_p = &board_tiles[flatten_coords(x, y, board_size)];
-    if (!initialized_bombs || tile_p->is_revealed)
+    bool has_flag_changed = board_flag_tile(board, x, y);
+
+    if (!has_flag_changed) return;
+
+    tile_type_t tile_to_draw = TILE_TYPE_HIDDEN;
+    if (board_is_flag(board, x, y))
     {
-        return;
+        tile_to_draw = TILE_TYPE_FLAG;
     }
 
-    bool is_bomb = tile_p->is_bomb;
+    draw_tile(x - scroll_state[0], y - scroll_state[1], tile_to_draw);
 
-    if (tile_p->is_flagged)
+    bool is_victory = false;
+    if (board_is_game_over(board, &is_victory))
     {
-        tile_p->is_flagged = false;
-        draw_tile(x - scroll_state[0], y - scroll_state[1], TILE_TYPE_HIDDEN);
-        flags_num++;
-        if (is_bomb)
-        {
-            unflagged_bombs++;
-        }
-    }
-    else
-    {
-        if (flags_num <= 0)
-        {
-            return;
-        }
-
-        // Set tile to flagged.
-        tile_p->is_flagged = true;
-
-        // Re-draw tile.
-        draw_tile(x - scroll_state[0], y - scroll_state[1], TILE_TYPE_FLAG);
-        flags_num--;
-        if (is_bomb)
-        {
-            unflagged_bombs--;
-        }
-
-        if (unflagged_bombs == 0)
-        {
-            game_over(true);
-        }
+        game_over(is_victory);
     }
 }
 
@@ -749,7 +579,7 @@ void update_ui()
     }
 
     // Update flags left.
-    number_to_chars(flags_used, 0, 3, flags_num);
+    number_to_chars(flags_used, 0, 3, board->flags_num);
     set_bkg_tiles(13, 11, 4, 2, flags_used);
 
     // Update scroll status.
@@ -948,12 +778,15 @@ void handle_input()
     {
         if (!a_clicked && board_manipulation_enabled && !select_menu_open)
         {
-            if (!initialized_bombs)
+            uint8_t player_x = cursor_board_x();
+            uint8_t player_y = cursor_board_y();
+
+            if (!board->initialized_bombs)
             {
                 initialize_bombs();
             }
 
-            click_tile(cursor_board_x(), cursor_board_y());
+            click_tile(player_x, player_y);
 
             a_clicked = true;
         }
